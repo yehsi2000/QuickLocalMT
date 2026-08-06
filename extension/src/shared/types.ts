@@ -1,7 +1,14 @@
 export type LangCode = 'auto' | 'ko' | 'en' | 'ja';
 
+export type ProviderKind = 'gateway' | 'ollama' | 'llamacpp';
+
 export type ExtensionSettings = {
+  provider: ProviderKind;
   gatewayBaseUrl: string;
+  ollamaBaseUrl: string;
+  ollamaModel: string;
+  llamacppBaseUrl: string;
+  llamacppModel: string;
   defaultSourceLang: LangCode;
   defaultTargetLang: Exclude<LangCode, 'auto'>;
   concurrency: number;

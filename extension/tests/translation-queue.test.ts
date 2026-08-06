@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TranslationQueue, type QueueJob } from '../src/background/translation-queue';
+import { TranslationQueue, type QueueJob, type QueueSummary } from '../src/background/translation-queue';
+import { translateText } from '../src/background/api-client';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -36,6 +37,22 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function makeQueue(options: {
+  concurrency: number;
+  onResult: (result: { ok: boolean; blockId: string; translation?: string; error?: { code: string; message: string } }) => void;
+  onComplete: (summary: QueueSummary) => void;
+}): TranslationQueue {
+  return new TranslationQueue({
+    concurrency: options.concurrency,
+    translate: (text, sourceLang, targetLang, signal) =>
+      translateText('http://127.0.0.1:8000', { text, source_lang: sourceLang, target_lang: targetLang }, signal).then(
+        (response) => response.translation,
+      ),
+    onResult: options.onResult,
+    onComplete: options.onComplete,
+  });
+}
+
 describe('TranslationQueue', () => {
   it('limits concurrent requests to the configured concurrency', async () => {
     let active = 0;
@@ -56,9 +73,8 @@ describe('TranslationQueue', () => {
 
     const results: string[] = [];
     let complete = false;
-    const queue = new TranslationQueue({
+    const queue = makeQueue({
       concurrency: 2,
-      baseUrl: 'http://127.0.0.1:8000',
       onResult: (result) => {
         if (result.ok) {
           results.push(result.blockId);
@@ -94,9 +110,8 @@ describe('TranslationQueue', () => {
 
     const results: string[] = [];
     let complete = false;
-    const queue = new TranslationQueue({
+    const queue = makeQueue({
       concurrency: 2,
-      baseUrl: 'http://127.0.0.1:8000',
       onResult: (result) => {
         if (result.ok) {
           results.push(result.blockId);
@@ -122,9 +137,8 @@ describe('TranslationQueue', () => {
     const failed: string[] = [];
     let complete = false;
     let summaryTotal = 0;
-    const queue = new TranslationQueue({
+    const queue = makeQueue({
       concurrency: 2,
-      baseUrl: 'http://127.0.0.1:8000',
       onResult: (result) => {
         if (!result.ok) {
           failed.push(result.blockId);
@@ -158,9 +172,8 @@ describe('TranslationQueue', () => {
     });
 
     const results: string[] = [];
-    const queue = new TranslationQueue({
+    const queue = makeQueue({
       concurrency: 2,
-      baseUrl: 'http://127.0.0.1:8000',
       onResult: (result) => {
         if (result.ok) {
           results.push(result.blockId);
@@ -180,9 +193,8 @@ describe('TranslationQueue', () => {
 
   it('handles an empty job list', async () => {
     let complete = false;
-    const queue = new TranslationQueue({
+    const queue = makeQueue({
       concurrency: 2,
-      baseUrl: 'http://127.0.0.1:8000',
       onResult: () => undefined,
       onComplete: () => {
         complete = true;

@@ -1,4 +1,4 @@
-import { getGatewayHealth } from './api-client';
+import { getProviderHealth, translateChunk } from './api-client';
 import { TranslationQueue } from './translation-queue';
 import { addDomainRule, findRuleForUrl, loadSettings } from './settings';
 import { isExtensionMessage, type ExtensionMessage } from '../shared/messages';
@@ -62,12 +62,25 @@ async function ensureContentScript(tabId: number): Promise<void> {
   await chrome.scripting.executeScript({ target: { tabId }, files: ['content-script.js'] });
 }
 
-function queueForTab(tabId: number, baseUrl: string, concurrency: number): TranslationQueue {
+function queueForTab(
+  tabId: number,
+  settings: Awaited<ReturnType<typeof loadSettings>>,
+): TranslationQueue {
   let queue = queues.get(tabId);
   if (!queue) {
     queue = new TranslationQueue({
-      concurrency,
-      baseUrl,
+      concurrency: settings.concurrency,
+      translate: (text, sourceLang, targetLang, signal) =>
+        translateChunk(
+          settings,
+          {
+            text,
+            source_lang: sourceLang,
+            target_lang: targetLang,
+            preset: 'translation-default',
+          },
+          signal,
+        ),
       onResult: (result: QueueResult) => {
         const message: ExtensionMessage = {
           type: 'TRANSLATION_RESULT',
@@ -176,13 +189,13 @@ async function handleMessage(
     case 'GATEWAY_STATUS_REQUEST': {
       const settings = await loadSettings();
       try {
-        const health = await getGatewayHealth(settings.gatewayBaseUrl);
+        const health = await getProviderHealth(settings);
         return { type: 'GATEWAY_STATUS', connected: true, health };
       } catch (error) {
         return {
           type: 'GATEWAY_STATUS',
           connected: false,
-          error: error instanceof Error ? error.message : 'Gateway unavailable',
+          error: error instanceof Error ? error.message : 'Translation provider unavailable',
         };
       }
     }
@@ -231,7 +244,7 @@ async function handleMessage(
       }
       const tabId = sender.tab.id;
       const settings = await loadSettings();
-      const queue = queueForTab(tabId, settings.gatewayBaseUrl, settings.concurrency);
+      const queue = queueForTab(tabId, settings);
       queue.runSession(
         message.blocks.map((block) => ({
           requestId: message.requestId,

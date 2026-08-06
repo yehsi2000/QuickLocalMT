@@ -26,14 +26,16 @@ local-selector-translator/
 
 ## Quick start
 
-### 1. Start the local model
+You can use the extension in two ways: through the local FastAPI **gateway**
+(recommended, keeps all prompt/model logic server-side) or **directly** against a
+running Ollama / llama.cpp server.
+
+### Option A — local gateway (default)
 
 ```bash
 ollama pull hy-mt:1.5b
 ollama serve
 ```
-
-### 2. Start the gateway
 
 ```bash
 cd gateway
@@ -54,6 +56,20 @@ Verify it is running:
 curl http://127.0.0.1:8000/health
 # {"status":"ok","runtime":"ollama","model":"hy-mt:1.5b"}
 ```
+
+### Option B — direct Ollama / llama.cpp (no gateway)
+
+Open **Options → Translation provider** and pick the provider:
+
+- **Ollama (direct)**: base URL `http://127.0.0.1:11434` + model name
+  (e.g. `hy-mt:1.5b`). The extension calls `POST /api/generate`.
+- **llama.cpp server (direct)**: base URL `http://127.0.0.1:8080` + optional model
+  name. The extension calls `POST /v1/chat/completions`.
+
+In direct mode the extension builds the prompt and validates model output itself
+(repetition/echo/length guards with one retry), so the gateway is not required.
+Host permissions already cover `127.0.0.1`, `localhost`, and local `192.168.*` /
+`10.*` ranges on any port.
 
 ### 3. Build and load the extension
 

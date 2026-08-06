@@ -5,8 +5,8 @@ import {
   saveSettings,
   updateDomainRule,
 } from '../background/settings';
-import { isValidSelector } from '../shared/validation';
-import type { DomainRule, ExtensionSettings } from '../shared/types';
+import { isValidGatewayUrl, isValidSelector } from '../shared/validation';
+import type { DomainRule, ExtensionSettings, ProviderKind } from '../shared/types';
 
 function byId<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -16,7 +16,12 @@ function byId<T extends HTMLElement>(id: string): T {
   return element as T;
 }
 
+const providerSelect = byId<HTMLSelectElement>('provider');
 const gatewayUrlInput = byId<HTMLInputElement>('gateway-url');
+const ollamaUrlInput = byId<HTMLInputElement>('ollama-url');
+const ollamaModelInput = byId<HTMLInputElement>('ollama-model');
+const llamacppUrlInput = byId<HTMLInputElement>('llamacpp-url');
+const llamacppModelInput = byId<HTMLInputElement>('llamacpp-model');
 const concurrencyInput = byId<HTMLInputElement>('concurrency');
 const chunkSizeInput = byId<HTMLInputElement>('chunk-size');
 const defaultSourceSelect = byId<HTMLSelectElement>('default-source');
@@ -42,7 +47,12 @@ const ruleMsg = byId<HTMLDivElement>('rule-msg');
 const testResult = byId<HTMLDivElement>('test-result');
 
 let settings: ExtensionSettings = {
+  provider: 'gateway',
   gatewayBaseUrl: 'http://127.0.0.1:8000',
+  ollamaBaseUrl: 'http://127.0.0.1:11434',
+  ollamaModel: 'hy-mt:1.5b',
+  llamacppBaseUrl: 'http://127.0.0.1:8080',
+  llamacppModel: '',
   defaultSourceLang: 'auto',
   defaultTargetLang: 'en',
   concurrency: 2,
@@ -177,13 +187,28 @@ async function runTest(selector: string): Promise<void> {
   }
 }
 
+function toggleProviderFields(): void {
+  for (const kind of ['gateway', 'ollama', 'llamacpp'] as const) {
+    const fields = document.getElementById(`provider-fields-${kind}`);
+    if (fields) {
+      fields.classList.toggle('active', providerSelect.value === kind);
+    }
+  }
+}
+
 function fillGeneralForm(): void {
+  providerSelect.value = settings.provider;
   gatewayUrlInput.value = settings.gatewayBaseUrl;
+  ollamaUrlInput.value = settings.ollamaBaseUrl;
+  ollamaModelInput.value = settings.ollamaModel;
+  llamacppUrlInput.value = settings.llamacppBaseUrl;
+  llamacppModelInput.value = settings.llamacppModel;
   concurrencyInput.value = String(settings.concurrency);
   chunkSizeInput.value = String(settings.textChunkMaxChars);
   defaultSourceSelect.value = settings.defaultSourceLang;
   defaultTargetSelect.value = settings.defaultTargetLang;
   autoRuleCheckbox.checked = settings.autoUseSavedRule;
+  toggleProviderFields();
 }
 
 async function loadAndRender(): Promise<void> {
@@ -203,8 +228,21 @@ saveGeneralBtn.addEventListener('click', async () => {
     flashMessage(saveMsg, 'Chunk size must be between 200 and 8000.', 'err');
     return;
   }
+  const provider = providerSelect.value as ProviderKind;
+  const gatewayUrl = gatewayUrlInput.value.trim() || 'http://127.0.0.1:8000';
+  const ollamaUrl = ollamaUrlInput.value.trim() || 'http://127.0.0.1:11434';
+  const llamacppUrl = llamacppUrlInput.value.trim() || 'http://127.0.0.1:8080';
+  if (!isValidGatewayUrl(gatewayUrl) || !isValidGatewayUrl(ollamaUrl) || !isValidGatewayUrl(llamacppUrl)) {
+    flashMessage(saveMsg, 'Provider URLs must be valid http(s) URLs.', 'err');
+    return;
+  }
   settings = await saveSettings({
-    gatewayBaseUrl: gatewayUrlInput.value.trim() || 'http://127.0.0.1:8000',
+    provider,
+    gatewayBaseUrl: gatewayUrl,
+    ollamaBaseUrl: ollamaUrl,
+    ollamaModel: ollamaModelInput.value.trim() || 'hy-mt:1.5b',
+    llamacppBaseUrl: llamacppUrl,
+    llamacppModel: llamacppModelInput.value.trim(),
     concurrency,
     textChunkMaxChars: chunkSize,
     defaultSourceLang: defaultSourceSelect.value as ExtensionSettings['defaultSourceLang'],
@@ -213,6 +251,8 @@ saveGeneralBtn.addEventListener('click', async () => {
   });
   flashMessage(saveMsg, 'Settings saved.', 'ok');
 });
+
+providerSelect.addEventListener('change', toggleProviderFields);
 
 addRuleBtn.addEventListener('click', () => openEditor(null));
 

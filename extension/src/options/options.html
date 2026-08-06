@@ -59,6 +59,8 @@
       .msg { margin-top: 10px; font-size: 13px; padding: 8px 10px; border-radius: 6px; }
       .msg.ok { background: #dcfce7; color: #166534; }
       .msg.err { background: #fee2e2; color: #991b1b; }
+      .provider-fields { display: none; }
+      .provider-fields.active { display: block; }
     </style>
   </head>
   <body>
@@ -66,11 +68,41 @@
       <h1>Local Selector Translator</h1>
       <p class="sub">Settings for the translation gateway and saved selector rules.</p>
 
-      <h2>Gateway</h2>
+      <h2>Translation provider</h2>
       <section>
         <div class="field">
-          <label for="gateway-url">Gateway base URL</label>
-          <input id="gateway-url" type="text" spellcheck="false" />
+          <label for="provider">Provider</label>
+          <select id="provider">
+            <option value="gateway">Local gateway (FastAPI)</option>
+            <option value="ollama">Ollama (direct)</option>
+            <option value="llamacpp">llama.cpp server (direct)</option>
+          </select>
+        </div>
+        <div id="provider-fields-gateway" class="provider-fields">
+          <div class="field">
+            <label for="gateway-url">Gateway base URL</label>
+            <input id="gateway-url" type="text" spellcheck="false" />
+          </div>
+        </div>
+        <div id="provider-fields-ollama" class="provider-fields">
+          <div class="field">
+            <label for="ollama-url">Ollama base URL</label>
+            <input id="ollama-url" type="text" spellcheck="false" />
+          </div>
+          <div class="field">
+            <label for="ollama-model">Ollama model</label>
+            <input id="ollama-model" type="text" spellcheck="false" />
+          </div>
+        </div>
+        <div id="provider-fields-llamacpp" class="provider-fields">
+          <div class="field">
+            <label for="llamacpp-url">llama.cpp server base URL</label>
+            <input id="llamacpp-url" type="text" spellcheck="false" />
+          </div>
+          <div class="field">
+            <label for="llamacpp-model">Model name (optional)</label>
+            <input id="llamacpp-model" type="text" spellcheck="false" />
+          </div>
         </div>
         <div class="field">
           <label for="concurrency">Max concurrent requests (1–4)</label>

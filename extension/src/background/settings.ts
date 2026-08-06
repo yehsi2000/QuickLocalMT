@@ -6,13 +6,19 @@ import {
   isValidLangCode,
   isValidSelector,
   isValidTargetLang,
+  normalizeBaseUrl,
   normalizeGatewayUrl,
   normalizeLang,
   normalizeSelector,
 } from '../shared/validation';
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
+  provider: 'gateway',
   gatewayBaseUrl: 'http://127.0.0.1:8000',
+  ollamaBaseUrl: 'http://127.0.0.1:11434',
+  ollamaModel: 'hy-mt:1.5b',
+  llamacppBaseUrl: 'http://127.0.0.1:8080',
+  llamacppModel: '',
   defaultSourceLang: 'auto',
   defaultTargetLang: 'en',
   concurrency: 2,
@@ -64,8 +70,19 @@ export function sanitizeSettings(raw: unknown): ExtensionSettings {
         .filter((rule): rule is DomainRule => rule !== null)
         .slice(0, 200)
     : [];
+  const provider =
+    record.provider === 'ollama' || record.provider === 'llamacpp' ? record.provider : 'gateway';
   return {
+    provider,
     gatewayBaseUrl: normalizeGatewayUrl(record.gatewayBaseUrl),
+    ollamaBaseUrl: normalizeBaseUrl(record.ollamaBaseUrl, 'http://127.0.0.1:11434'),
+    ollamaModel:
+      typeof record.ollamaModel === 'string' && record.ollamaModel.trim().length > 0
+        ? record.ollamaModel.trim().slice(0, 128)
+        : DEFAULT_SETTINGS.ollamaModel,
+    llamacppBaseUrl: normalizeBaseUrl(record.llamacppBaseUrl, 'http://127.0.0.1:8080'),
+    llamacppModel:
+      typeof record.llamacppModel === 'string' ? record.llamacppModel.trim().slice(0, 128) : '',
     defaultSourceLang: normalizeLang(record.defaultSourceLang, 'auto'),
     defaultTargetLang: isValidTargetLang(record.defaultTargetLang)
       ? record.defaultTargetLang

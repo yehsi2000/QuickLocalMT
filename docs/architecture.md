@@ -211,11 +211,31 @@ Rejected output (retry once, then structured error):
 5. output more than 3× the source length
 6. prompt leakage (`Translate …`, `Translation:`, `<text>`, chat markers)
 
-## Security notes
+### Security notes
 
-- The extension sends browser text only to the configured local gateway.
+- The extension sends browser text only to the configured provider: the local
+  gateway, or the directly configured Ollama / llama.cpp endpoint.
+- Direct provider mode performs prompt building and output validation in the
+  extension (`src/shared/prompt.ts`, `src/shared/output-guard.ts`). The gateway
+  mode keeps all of that server-side and remains the recommended setup.
 - No cloud services, no analytics, no telemetry.
 - No `eval`, remote code, or inline scripts (MV3 CSP).
 - Gateway logs never include full document text unless `LST_DEBUG_LOG_TEXT=true`.
 - CORS is only enabled for explicitly configured origins
   (e.g. `chrome-extension://<id>` during development).
+
+## Direct providers (no gateway)
+
+`ExtensionSettings.provider` selects the translation backend:
+
+| Provider | Endpoint used | Health check |
+| :-- | :-- | :-- |
+| `gateway` | `POST {gatewayBaseUrl}/translate` | `GET {gatewayBaseUrl}/health` |
+| `ollama` | `POST {ollamaBaseUrl}/api/generate` | `GET {ollamaBaseUrl}/api/tags` |
+| `llamacpp` | `POST {llamacppBaseUrl}/v1/chat/completions` | `GET {llamacppBaseUrl}/health` |
+
+For direct providers the service worker (`api-client.ts`) builds the translation
+prompt, computes a conservative `num_predict` budget, and validates each response
+with `output-guard.ts`, retrying once with adjusted sampling before reporting a
+block error. The manifest host permissions cover `127.0.0.1`/`localhost` on any
+port and the local `192.168.*` / `10.*` ranges.

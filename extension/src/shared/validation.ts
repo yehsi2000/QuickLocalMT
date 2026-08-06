@@ -52,11 +52,15 @@ export function isValidGatewayUrl(value: unknown): value is string {
   }
 }
 
-export function normalizeGatewayUrl(value: unknown): string {
+export function normalizeBaseUrl(value: unknown, fallback: string): string {
   if (!isValidGatewayUrl(value)) {
-    return 'http://127.0.0.1:8000';
+    return fallback;
   }
   return value.trim().replace(/\/+$/, '');
+}
+
+export function normalizeGatewayUrl(value: unknown): string {
+  return normalizeBaseUrl(value, 'http://127.0.0.1:8000');
 }
 
 export function clampInt(value: unknown, min: number, max: number, fallback: number): number {

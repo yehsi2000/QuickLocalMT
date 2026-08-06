@@ -1,9 +1,4 @@
-import {
-  GatewayApiError,
-  GatewayConnectionError,
-  GatewayTimeoutError,
-  translateText,
-} from './api-client';
+import { GatewayApiError, GatewayConnectionError, GatewayTimeoutError } from './api-client';
 import type { BlockError } from '../shared/types';
 
 export type QueueJob = {
@@ -13,6 +8,13 @@ export type QueueJob = {
   sourceLang: string;
   targetLang: string;
 };
+
+export type TranslateFunction = (
+  text: string,
+  sourceLang: string,
+  targetLang: string,
+  signal?: AbortSignal,
+) => Promise<string>;
 
 export type QueueResult =
   | { ok: true; blockId: string; translation: string }
@@ -56,7 +58,7 @@ function isRetriable(error: unknown): boolean {
 
 export class TranslationQueue {
   private readonly concurrency: number;
-  private readonly baseUrl: string;
+  private readonly translate: TranslateFunction;
   private readonly onResult: (result: QueueResult) => void;
   private readonly onComplete: (summary: QueueSummary) => void;
 
@@ -71,12 +73,12 @@ export class TranslationQueue {
 
   constructor(options: {
     concurrency: number;
-    baseUrl: string;
+    translate: TranslateFunction;
     onResult: (result: QueueResult) => void;
     onComplete: (summary: QueueSummary) => void;
   }) {
     this.concurrency = Math.max(1, options.concurrency);
-    this.baseUrl = options.baseUrl;
+    this.translate = options.translate;
     this.onResult = options.onResult;
     this.onComplete = options.onComplete;
   }
@@ -143,17 +145,7 @@ export class TranslationQueue {
   }
 
   private async attemptTranslate(job: QueueJob): Promise<string> {
-    const response = await translateText(
-      this.baseUrl,
-      {
-        text: job.text,
-        source_lang: job.sourceLang,
-        target_lang: job.targetLang,
-        preset: 'translation-default',
-      },
-      this.abortController?.signal,
-    );
-    return response.translation;
+    return this.translate(job.text, job.sourceLang, job.targetLang, this.abortController?.signal);
   }
 
   private async processJob(job: QueueJob): Promise<void> {

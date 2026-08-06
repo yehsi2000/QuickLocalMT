@@ -71,6 +71,30 @@ npm test           # vitest + jsdom
 3. **Load unpacked** → select `extension/dist`.
 4. Pin the extension and open the popup.
 
+### Direct provider mode (no gateway)
+
+Open **Options → Translation provider** and select one of:
+
+- **Ollama (direct)** — the extension calls `POST {base}/api/generate` with the
+  configured model. Health is checked via `GET {base}/api/tags`.
+- **llama.cpp server (direct)** — the extension calls
+  `POST {base}/v1/chat/completions` (OpenAI-compatible). Health is checked via
+  `GET {base}/health`. Model name is optional.
+
+In direct mode the extension builds the translation prompt, computes the output
+token budget, and validates the model response (repetition, echo, length, prompt
+leakage) with one retry using adjusted sampling — the same guarantees the gateway
+provides. The gateway is not needed.
+
+Host permissions cover `127.0.0.1` and `localhost` on any port, plus the local
+`192.168.*` / `10.*` ranges, so a provider on a LAN machine also works.
+
+```bash
+# example: run llama.cpp server for a translation model
+./llama-server -m models/qwen2.5-3b-instruct-q4_k_m.gguf \
+  --host 127.0.0.1 --port 8080
+```
+
 ### Local HTTPS vs HTTP
 
 The gateway runs on `http://127.0.0.1:8000`, which is allowed by the extension's
