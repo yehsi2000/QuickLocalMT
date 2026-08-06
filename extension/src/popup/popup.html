@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="./popup.css" />
+    <title>Local Translator</title>
+  </head>
+  <body>
+    <main class="popup">
+      <header class="header">
+        <h1>Local Selector Translator</h1>
+        <div id="status" class="status unknown" title="">Checking gateway…</div>
+      </header>
+      <section class="langs">
+        <div class="field">
+          <label for="source-lang">Source</label>
+          <select id="source-lang">
+            <option value="auto">Auto</option>
+            <option value="ko">Korean</option>
+            <option value="en">English</option>
+            <option value="ja">Japanese</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="target-lang">Target</label>
+          <select id="target-lang">
+            <option value="ko">Korean</option>
+            <option value="en">English</option>
+            <option value="ja">Japanese</option>
+          </select>
+        </div>
+      </section>
+      <button id="select-area" class="primary" type="button">Select area</button>
+      <button id="translate-saved" type="button" disabled>Translate saved area</button>
+      <button id="restore" type="button" disabled>Restore original</button>
+      <button id="cancel" type="button" disabled>Cancel</button>
+      <p id="progress" class="progress hidden"></p>
+      <footer class="footer">
+        <a id="open-options" href="#">Settings</a>
+      </footer>
+    </main>
+    <script type="module" src="./popup.ts"></script>
+  </body>
+</html>

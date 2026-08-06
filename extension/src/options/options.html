@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Local Selector Translator — Settings</title>
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 14px/1.6 system-ui, -apple-system, sans-serif;
+        color: #0f172a;
+        background: #f8fafc;
+      }
+      main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
+      h1 { font-size: 20px; margin: 0 0 4px; }
+      h2 { font-size: 15px; margin: 28px 0 8px; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px; }
+      p.sub { color: #64748b; font-size: 13px; margin: 0 0 12px; }
+      section { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+      .field label { font-size: 12px; color: #475569; }
+      input, select {
+        font: 13px/1.4 system-ui, sans-serif;
+        padding: 7px 9px;
+        border: 1px solid #cbd5e1;
+        border-radius: 6px;
+        background: #fff;
+        color: #0f172a;
+      }
+      input[type="checkbox"] { width: auto; }
+      .check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+      button {
+        font: 13px/1.4 system-ui, sans-serif;
+        padding: 7px 12px;
+        border: 1px solid #cbd5e1;
+        border-radius: 6px;
+        background: #fff;
+        color: #0f172a;
+        cursor: pointer;
+      }
+      button.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+      button.danger { background: #ef4444; border-color: #ef4444; color: #fff; }
+      button:disabled { opacity: 0.45; cursor: not-allowed; }
+      .rule { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0; border-bottom: 1px solid #f1f5f9; }
+      .rule:last-child { border-bottom: none; }
+      .rule-info { flex: 1; min-width: 0; }
+      .rule-info .host { font-weight: 600; }
+      .rule-info code { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; font-size: 12px; color: #334155; }
+      .rule-info .meta { font-size: 12px; color: #64748b; }
+      .rule-actions { display: flex; gap: 6px; flex-shrink: 0; }
+      .rule-actions button { font-size: 12px; padding: 4px 8px; }
+      .toggle { font-size: 12px; padding: 4px 8px; }
+      .toggle.off { background: #f1f5f9; color: #64748b; }
+      .empty { color: #94a3b8; font-size: 13px; padding: 12px 0; }
+      #editor { display: none; border: 1px solid #bfdbfe; background: #eff6ff; }
+      #editor.open { display: block; }
+      .row { display: flex; gap: 8px; align-items: flex-end; }
+      .result { margin-top: 8px; font-size: 12px; color: #334155; background: #f1f5f9; padding: 8px 10px; border-radius: 6px; white-space: pre-wrap; word-break: break-all; }
+      .msg { margin-top: 10px; font-size: 13px; padding: 8px 10px; border-radius: 6px; }
+      .msg.ok { background: #dcfce7; color: #166534; }
+      .msg.err { background: #fee2e2; color: #991b1b; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Local Selector Translator</h1>
+      <p class="sub">Settings for the translation gateway and saved selector rules.</p>
+
+      <h2>Gateway</h2>
+      <section>
+        <div class="field">
+          <label for="gateway-url">Gateway base URL</label>
+          <input id="gateway-url" type="text" spellcheck="false" />
+        </div>
+        <div class="field">
+          <label for="concurrency">Max concurrent requests (1–4)</label>
+          <input id="concurrency" type="number" min="1" max="4" />
+        </div>
+        <div class="field">
+          <label for="chunk-size">Max characters per request (200–8000)</label>
+          <input id="chunk-size" type="number" min="200" max="8000" />
+        </div>
+        <div class="grid">
+          <div class="field">
+            <label for="default-source">Default source language</label>
+            <select id="default-source">
+              <option value="auto">Auto</option>
+              <option value="ko">Korean</option>
+              <option value="en">English</option>
+              <option value="ja">Japanese</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="default-target">Default target language</label>
+            <select id="default-target">
+              <option value="ko">Korean</option>
+              <option value="en">English</option>
+              <option value="ja">Japanese</option>
+            </select>
+          </div>
+        </div>
+        <div class="check">
+          <input id="auto-rule" type="checkbox" />
+          <label for="auto-rule">Auto-apply saved rule on page load (v1: no auto-translation)</label>
+        </div>
+        <div class="row" style="margin-top: 12px;">
+          <button id="save-general" class="primary">Save settings</button>
+          <span id="save-msg"></span>
+        </div>
+      </section>
+
+      <h2>Saved selector rules</h2>
+      <section>
+        <div id="rules-list"></div>
+        <button id="add-rule" class="primary">Add rule</button>
+      </section>
+
+      <section id="editor">
+        <h2 id="editor-title" style="border: none; margin: 0 0 10px;">New rule</h2>
+        <div class="field">
+          <label for="rule-host">Hostname (e.g. news.example.com)</label>
+          <input id="rule-host" type="text" spellcheck="false" />
+        </div>
+        <div class="field">
+          <label for="rule-path">Path pattern (optional, e.g. /article/*)</label>
+          <input id="rule-path" type="text" spellcheck="false" />
+        </div>
+        <div class="field">
+          <label for="rule-selector">CSS selector</label>
+          <input id="rule-selector" type="text" spellcheck="false" />
+        </div>
+        <div class="field">
+          <label for="rule-excluded">Excluded selectors (comma separated)</label>
+          <input id="rule-excluded" type="text" spellcheck="false" />
+        </div>
+        <div class="grid">
+          <div class="field">
+            <label for="rule-source">Source language</label>
+            <select id="rule-source">
+              <option value="">Use default</option>
+              <option value="auto">Auto</option>
+              <option value="ko">Korean</option>
+              <option value="en">English</option>
+              <option value="ja">Japanese</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="rule-target">Target language</label>
+            <select id="rule-target">
+              <option value="">Use default</option>
+              <option value="ko">Korean</option>
+              <option value="en">English</option>
+              <option value="ja">Japanese</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <button id="rule-save" class="primary">Save rule</button>
+          <button id="rule-test">Test on active page</button>
+          <button id="rule-delete" class="danger">Delete</button>
+          <button id="rule-cancel">Cancel</button>
+        </div>
+        <div id="rule-msg" class="msg"></div>
+        <div id="test-result" class="result"></div>
+      </section>
+    </main>
+    <script type="module" src="./options.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,194 @@
+import type { DomainRule, ExtensionSettings, LangCode } from '../shared/types';
+import {
+  clampInt,
+  isPlainRecord,
+  isNonEmptyText,
+  isValidLangCode,
+  isValidSelector,
+  isValidTargetLang,
+  normalizeGatewayUrl,
+  normalizeLang,
+  normalizeSelector,
+} from '../shared/validation';
+
+export const DEFAULT_SETTINGS: ExtensionSettings = {
+  gatewayBaseUrl: 'http://127.0.0.1:8000',
+  defaultSourceLang: 'auto',
+  defaultTargetLang: 'en',
+  concurrency: 2,
+  textChunkMaxChars: 1200,
+  autoUseSavedRule: false,
+  domainRules: [],
+};
+
+const SETTINGS_KEY = 'extensionSettings';
+
+function sanitizeRule(value: unknown): DomainRule | null {
+  if (!isPlainRecord(value)) {
+    return null;
+  }
+  const selector = normalizeSelector(value.selector);
+  if (!isValidSelector(selector)) {
+    return null;
+  }
+  const hostname = typeof value.hostname === 'string' ? value.hostname.trim() : '';
+  if (hostname.length === 0) {
+    return null;
+  }
+  const id = typeof value.id === 'string' && value.id.length > 0 ? value.id : crypto.randomUUID();
+  const excludedSelectors = Array.isArray(value.excludedSelectors)
+    ? value.excludedSelectors.filter((item): item is string => isNonEmptyText(item)).slice(0, 50)
+    : [];
+  return {
+    id,
+    hostname,
+    pathPattern:
+      typeof value.pathPattern === 'string' && value.pathPattern.length > 0
+        ? value.pathPattern
+        : undefined,
+    selector,
+    excludedSelectors,
+    sourceLang: isValidLangCode(value.sourceLang) ? value.sourceLang : undefined,
+    targetLang: isValidTargetLang(value.targetLang) ? value.targetLang : undefined,
+    enabled: typeof value.enabled === 'boolean' ? value.enabled : true,
+    createdAt: typeof value.createdAt === 'string' ? value.createdAt : new Date().toISOString(),
+    updatedAt: typeof value.updatedAt === 'string' ? value.updatedAt : new Date().toISOString(),
+  };
+}
+
+export function sanitizeSettings(raw: unknown): ExtensionSettings {
+  const record = isPlainRecord(raw) ? raw : {};
+  const rules = Array.isArray(record.domainRules)
+    ? record.domainRules
+        .map(sanitizeRule)
+        .filter((rule): rule is DomainRule => rule !== null)
+        .slice(0, 200)
+    : [];
+  return {
+    gatewayBaseUrl: normalizeGatewayUrl(record.gatewayBaseUrl),
+    defaultSourceLang: normalizeLang(record.defaultSourceLang, 'auto'),
+    defaultTargetLang: isValidTargetLang(record.defaultTargetLang)
+      ? record.defaultTargetLang
+      : DEFAULT_SETTINGS.defaultTargetLang,
+    concurrency: clampInt(record.concurrency, 1, 4, DEFAULT_SETTINGS.concurrency),
+    textChunkMaxChars: clampInt(record.textChunkMaxChars, 200, 8000, DEFAULT_SETTINGS.textChunkMaxChars),
+    autoUseSavedRule: typeof record.autoUseSavedRule === 'boolean' ? record.autoUseSavedRule : false,
+    domainRules: rules,
+  };
+}
+
+export async function loadSettings(): Promise<ExtensionSettings> {
+  const stored = await chrome.storage.local.get(SETTINGS_KEY);
+  return sanitizeSettings(stored[SETTINGS_KEY]);
+}
+
+export async function saveSettings(patch: Partial<ExtensionSettings>): Promise<ExtensionSettings> {
+  const current = await loadSettings();
+  const merged = { ...current, ...patch };
+  const sanitized = sanitizeSettings(merged);
+  await chrome.storage.local.set({ [SETTINGS_KEY]: sanitized });
+  return sanitized;
+}
+
+export async function addDomainRule(
+  rule: Omit<DomainRule, 'id' | 'createdAt' | 'updatedAt'>,
+): Promise<DomainRule> {
+  const now = new Date().toISOString();
+  const created: DomainRule = {
+    ...rule,
+    id: crypto.randomUUID(),
+    createdAt: now,
+    updatedAt: now,
+  };
+  const settings = await loadSettings();
+  const withoutDuplicate = settings.domainRules.filter(
+    (existing) =>
+      existing.hostname !== created.hostname || existing.selector !== created.selector,
+  );
+  const updated = sanitizeSettings({
+    ...settings,
+    domainRules: [created, ...withoutDuplicate],
+  });
+  await chrome.storage.local.set({ [SETTINGS_KEY]: updated });
+  return created;
+}
+
+export async function updateDomainRule(id: string, patch: Partial<DomainRule>): Promise<void> {
+  const settings = await loadSettings();
+  const updated = sanitizeSettings({
+    ...settings,
+    domainRules: settings.domainRules.map((rule) =>
+      rule.id === id ? { ...rule, ...patch, id: rule.id, updatedAt: new Date().toISOString() } : rule,
+    ),
+  });
+  await chrome.storage.local.set({ [SETTINGS_KEY]: updated });
+}
+
+export async function deleteDomainRule(id: string): Promise<void> {
+  const settings = await loadSettings();
+  const updated = sanitizeSettings({
+    ...settings,
+    domainRules: settings.domainRules.filter((rule) => rule.id !== id),
+  });
+  await chrome.storage.local.set({ [SETTINGS_KEY]: updated });
+}
+
+export function hostnameFromUrl(url: string | undefined): string {
+  if (!url) {
+    return '';
+  }
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return '';
+  }
+}
+
+export function matchesPathPattern(pathPattern: string | undefined, pathname: string): boolean {
+  if (!pathPattern || pathPattern.length === 0) {
+    return true;
+  }
+  if (pathPattern === pathname) {
+    return true;
+  }
+  if (pathPattern.endsWith('*')) {
+    return pathname.startsWith(pathPattern.slice(0, -1));
+  }
+  return false;
+}
+
+export function findRuleForUrl(rules: DomainRule[], url: string): DomainRule | null {
+  const hostname = hostnameFromUrl(url);
+  if (hostname.length === 0) {
+    return null;
+  }
+  let pathname = '';
+  try {
+    pathname = new URL(url).pathname;
+  } catch {
+    pathname = '';
+  }
+  for (const rule of rules) {
+    if (!rule.enabled) {
+      continue;
+    }
+    if (rule.hostname !== hostname) {
+      continue;
+    }
+    if (!matchesPathPattern(rule.pathPattern, pathname)) {
+      continue;
+    }
+    return rule;
+  }
+  return null;
+}
+
+export function langForRule(rule: DomainRule | null, settings: ExtensionSettings): {
+  sourceLang: LangCode;
+  targetLang: Exclude<LangCode, 'auto'>;
+} {
+  return {
+    sourceLang: rule?.sourceLang ?? settings.defaultSourceLang,
+    targetLang: rule?.targetLang ?? settings.defaultTargetLang,
+  };
+}

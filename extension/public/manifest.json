@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Local Selector Translator",
+  "version": "0.1.0",
+  "description": "Translate selected web-page regions using a local LLM.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:8000/*",
+    "http://localhost:8000/*",
+    "http://192.168.*.*/*",
+    "http://10.*.*.*/*"
+  ],
+  "action": {
+    "default_title": "Local Translator",
+    "default_popup": "src/popup/popup.html"
+  },
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "options_page": "src/options/options.html"
+}
