@@ -13,6 +13,16 @@ type InternalBlock = TranslationBlock & {
   appliedText: string | null;
 };
 
+export type SelectorEntry = {
+  selector: string;
+  excludedSelectors: string[];
+};
+
+type CollectionRoot = {
+  element: Element;
+  excludedSelectors: string[];
+};
+
 export class DomTranslator {
   private currentRequestId: string | null = null;
   private blocks: InternalBlock[] = [];
@@ -45,20 +55,24 @@ export class DomTranslator {
 
   async start(
     requestId: string,
-    selector: string,
+    entries: SelectorEntry[],
     sourceLang: string,
     targetLang: string,
-    options: CollectOptions,
+    options: Pick<CollectOptions, 'maxChars'>,
   ): Promise<{ total: number } | { error: string }> {
     this.invalidate();
     this.restoreRecords();
     pageState.clear();
-    const element = document.querySelector(selector);
-    if (!element) {
-      this.events.onError('The saved selector matched no elements on this page.');
+    if (entries.length === 0) {
+      this.events.onError('No translation area selected.');
       return { error: 'SELECTOR_NO_MATCH' };
     }
-    const collected = collectBlocks(element, options);
+    const roots = this.resolveRoots(entries);
+    if (roots.length === 0) {
+      this.events.onError('The saved selectors matched no elements on this page.');
+      return { error: 'SELECTOR_NO_MATCH' };
+    }
+    const collected = this.collectFromRoots(roots, options.maxChars);
     if (collected.length === 0) {
       this.events.onComplete(0, 0);
       return { total: 0 };
@@ -93,6 +107,54 @@ export class DomTranslator {
       targetLang,
     });
     return { total: collected.length };
+  }
+
+  private resolveRoots(entries: SelectorEntry[]): CollectionRoot[] {
+    const roots: CollectionRoot[] = [];
+    for (const entry of entries) {
+      const element = document.querySelector(entry.selector);
+      if (!element) {
+        continue;
+      }
+      const covered = roots.some(
+        (root) =>
+          root.element === element ||
+          root.element.contains(element) ||
+          element.contains(root.element),
+      );
+      if (covered) {
+        continue;
+      }
+      roots.push({ element, excludedSelectors: entry.excludedSelectors });
+    }
+    return roots;
+  }
+
+  private collectFromRoots(roots: CollectionRoot[], maxChars: number): TranslationBlock[] {
+    const blocks: TranslationBlock[] = [];
+    const seenNodes = new Set<Text>();
+    for (const root of roots) {
+      const collected = collectBlocks(root.element, { maxChars, excludedSelectors: root.excludedSelectors });
+      for (const block of collected) {
+        const freshNodes = block.nodes.filter((node) => !seenNodes.has(node));
+        if (freshNodes.length === 0) {
+          continue;
+        }
+        for (const node of freshNodes) {
+          seenNodes.add(node);
+        }
+        if (freshNodes.length === block.nodes.length) {
+          blocks.push(block);
+        } else {
+          blocks.push({
+            id: block.id,
+            text: freshNodes.map((node) => node.nodeValue ?? '').join(''),
+            nodes: freshNodes,
+          });
+        }
+      }
+    }
+    return blocks.map((block, index) => ({ ...block, id: `b${index}` }));
   }
 
   applyResult(

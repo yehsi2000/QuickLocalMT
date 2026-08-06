@@ -31,10 +31,13 @@ describe('DomTranslator', () => {
       onError: (message) => events.errors.push(message),
     });
 
-    const started = await translator.start('req-1', '#article', 'ko', 'en', {
-      maxChars: 1200,
-      excludedSelectors: [],
-    });
+    const started = await translator.start(
+      'req-1',
+      [{ selector: '#article', excludedSelectors: [] }],
+      'ko',
+      'en',
+      { maxChars: 1200 },
+    );
     expect(started).toEqual({ total: 1 });
 
     const sentMessage = chrome.sendMessage.mock.calls[0]?.[0] as {
@@ -68,7 +71,9 @@ describe('DomTranslator', () => {
       onError: () => undefined,
     });
 
-    await translator.start('req-1', '#article', 'ko', 'en', { maxChars: 1200, excludedSelectors: [] });
+    await translator.start('req-1', [{ selector: '#article', excludedSelectors: [] }], 'ko', 'en', {
+      maxChars: 1200,
+    });
     const sentMessage = chrome.sendMessage.mock.calls[0]?.[0] as { blocks: Array<{ id: string; text: string }> };
     const blockId = sentMessage.blocks[0]?.id as string;
 
@@ -89,7 +94,9 @@ describe('DomTranslator', () => {
       onError: () => undefined,
     });
 
-    await translator.start('req-1', '#article', 'ko', 'en', { maxChars: 1200, excludedSelectors: [] });
+    await translator.start('req-1', [{ selector: '#article', excludedSelectors: [] }], 'ko', 'en', {
+      maxChars: 1200,
+    });
     const sentMessage = chrome.sendMessage.mock.calls[0]?.[0] as { blocks: Array<{ id: string; text: string }> };
     const blockIds = sentMessage.blocks.map((block: { id: string }) => block.id);
 
@@ -111,11 +118,84 @@ describe('DomTranslator', () => {
       onComplete: () => undefined,
       onError: (message) => errors.push(message),
     });
-    const result = await translator.start('req-1', '#missing', 'ko', 'en', {
-      maxChars: 1200,
-      excludedSelectors: [],
-    });
+    const result = await translator.start(
+      'req-1',
+      [{ selector: '#missing', excludedSelectors: [] }],
+      'ko',
+      'en',
+      { maxChars: 1200 },
+    );
     expect('error' in result && result.error).toBe('SELECTOR_NO_MATCH');
     expect(errors.length).toBe(1);
+  });
+
+  it('translates blocks from multiple selectors in one session', async () => {
+    const chrome = installChromeMock();
+    setupPage('<section id="a"><p>First section</p></section><section id="b"><p>Second section</p></section>');
+    const events = { completed: 0, failed: 0, errors: [] as string[] };
+    const translator = new DomTranslator({
+      onProgress: () => undefined,
+      onComplete: (completed, failed) => {
+        events.completed = completed;
+        events.failed = failed;
+      },
+      onError: (message) => events.errors.push(message),
+    });
+
+    const started = await translator.start(
+      'req-1',
+      [
+        { selector: '#a', excludedSelectors: [] },
+        { selector: '#b', excludedSelectors: [] },
+      ],
+      'ko',
+      'en',
+      { maxChars: 1200 },
+    );
+    expect(started).toEqual({ total: 2 });
+
+    const sentMessage = chrome.sendMessage.mock.calls[0]?.[0] as {
+      type: string;
+      blocks: Array<{ id: string; text: string }>;
+    };
+    expect(sentMessage.type).toBe('TRANSLATE_BLOCKS');
+    expect(sentMessage.blocks.map((block) => block.text)).toEqual(['First section', 'Second section']);
+
+    translator.applyResult('req-1', sentMessage.blocks[0]?.id as string, { translation: '첫 번째 구역' });
+    translator.applyResult('req-1', sentMessage.blocks[1]?.id as string, { translation: '두 번째 구역' });
+
+    expect(document.getElementById('a')?.textContent).toBe('첫 번째 구역');
+    expect(document.getElementById('b')?.textContent).toBe('두 번째 구역');
+    expect(events.completed).toBe(2);
+    expect(events.failed).toBe(0);
+    expect(events.errors.length).toBe(0);
+  });
+
+  it('does not translate a node twice when selectors overlap', async () => {
+    const chrome = installChromeMock();
+    setupPage('<div id="outer"><p>Shared text</p></div>');
+    const translator = new DomTranslator({
+      onProgress: () => undefined,
+      onComplete: () => undefined,
+      onError: () => undefined,
+    });
+
+    const started = await translator.start(
+      'req-1',
+      [
+        { selector: '#outer', excludedSelectors: [] },
+        { selector: '#outer p', excludedSelectors: [] },
+      ],
+      'ko',
+      'en',
+      { maxChars: 1200 },
+    );
+    expect(started).toEqual({ total: 1 });
+
+    const sentMessage = chrome.sendMessage.mock.calls[0]?.[0] as { blocks: Array<{ id: string; text: string }> };
+    expect(sentMessage.blocks.length).toBe(1);
+
+    translator.applyResult('req-1', sentMessage.blocks[0]?.id as string, { translation: '번역된 텍스트' });
+    expect(document.querySelector('p')?.textContent).toBe('번역된 텍스트');
   });
 });

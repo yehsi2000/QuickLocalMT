@@ -27,9 +27,10 @@ export type ExtensionMessage =
   | {
       type: 'START_TRANSLATION';
       requestId: string;
-      selector: string;
+      selectors: string[];
       sourceLang: string;
       targetLang: string;
+      useSavedRules: boolean;
     }
   | {
       type: 'TRANSLATION_PROGRESS';
@@ -56,9 +57,10 @@ export type ExtensionMessage =
     }
   | {
       type: 'TRANSLATE_SELECTOR';
-      selector: string;
+      selectors: string[];
       sourceLang: string;
       targetLang: string;
+      useSavedRules?: boolean;
     }
   | {
       type: 'TRANSLATE_BLOCKS';
@@ -85,7 +87,7 @@ export type ExtensionMessage =
       completed: number;
       failed: number;
       selector: string | null;
-      rule: DomainRule | null;
+      rules: DomainRule[];
     }
   | {
       type: 'GATEWAY_STATUS_REQUEST';

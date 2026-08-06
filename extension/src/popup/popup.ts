@@ -22,7 +22,7 @@ const optionsLink = byId<HTMLAnchorElement>('open-options');
 
 let gatewayConnected = false;
 let gatewayError: string | null = null;
-let pageRule: DomainRule | null = null;
+let pageRules: DomainRule[] = [];
 let running = false;
 let translated = false;
 
@@ -55,7 +55,7 @@ function setRunning(isRunning: boolean): void {
 
 function updateButtons(): void {
   selectAreaBtn.disabled = running;
-  translateSavedBtn.disabled = running || !gatewayConnected || pageRule === null;
+  translateSavedBtn.disabled = running || !gatewayConnected || pageRules.length === 0;
   restoreBtn.disabled = running || !translated;
   cancelBtn.disabled = !running;
 }
@@ -84,7 +84,7 @@ async function refresh(): Promise<void> {
   }
 
   if (stateResponse && stateResponse.type === 'PAGE_STATE') {
-    pageRule = stateResponse.rule;
+    pageRules = stateResponse.rules;
     running = stateResponse.inProgress;
     translated = stateResponse.translated;
     if (running) {
@@ -92,8 +92,11 @@ async function refresh(): Promise<void> {
     } else {
       progressEl.classList.add('hidden');
     }
-    if (stateResponse.rule) {
-      translateSavedBtn.textContent = `Translate saved area (${stateResponse.rule.hostname})`;
+    if (stateResponse.rules.length > 0) {
+      translateSavedBtn.textContent =
+        stateResponse.rules.length === 1
+          ? `Translate saved area (${stateResponse.rules[0]?.hostname ?? ''})`
+          : `Translate saved area (${stateResponse.rules.length} sections)`;
     } else {
       translateSavedBtn.textContent = 'Translate saved area';
     }
@@ -107,16 +110,18 @@ selectAreaBtn.addEventListener('click', () => {
 });
 
 translateSavedBtn.addEventListener('click', async () => {
-  if (!pageRule) {
+  if (pageRules.length === 0) {
     return;
   }
-  const sourceLang = pageRule.sourceLang ?? sourceSelect.value;
-  const targetLang = pageRule.targetLang ?? targetSelect.value;
+  const firstRule = pageRules[0] as DomainRule;
+  const sourceLang = firstRule.sourceLang ?? sourceSelect.value;
+  const targetLang = firstRule.targetLang ?? targetSelect.value;
   await sendMessage({
     type: 'TRANSLATE_SELECTOR',
-    selector: pageRule.selector,
+    selectors: pageRules.map((rule) => rule.selector),
     sourceLang,
     targetLang,
+    useSavedRules: true,
   });
   setRunning(true);
   renderProgress(0, 1, 0);

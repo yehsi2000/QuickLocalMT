@@ -1,8 +1,9 @@
 # Selector rules
 
 Saved rules map a hostname (and optional path pattern) to a CSS selector. When you
-click **Translate saved area**, the extension finds the rule matching the current
-URL and translates the element it selects.
+click **Translate saved area**, the extension finds **all** rules matching the current
+URL and translates every element they select in one pass, so one site can be split
+into several translated sections.
 
 ## Rule anatomy
 
@@ -27,6 +28,20 @@ URL and translates the element it selects.
   in Settings.
 - `excludedSelectors` are extra CSS selectors whose subtrees are skipped during
   text extraction (useful for ads, comments, or related-content blocks).
+
+## Multiple rules per site
+
+A single hostname may have any number of enabled rules. **Translate saved area**
+collects text from every rule that matches the current URL and translates them in one
+session. Use one rule per page section, e.g.:
+
+- `article .chapter-content` — the article body
+- `aside .table-of-contents` — the sidebar TOC
+- `#comments` — the comment list
+
+If two rules select overlapping elements, the text is still translated only once
+(the rule that comes first in the list wins for the overlapped region). To skip a
+subtree instead of adding a second rule, use `excludedSelectors` on the matching rule.
 
 ## How selectors are generated
 

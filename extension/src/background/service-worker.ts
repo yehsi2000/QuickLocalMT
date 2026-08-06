@@ -1,6 +1,6 @@
 import { getProviderHealth, translateChunk } from './api-client';
 import { TranslationQueue } from './translation-queue';
-import { addDomainRule, findRuleForUrl, loadSettings } from './settings';
+import { addDomainRule, findRulesForUrl, loadSettings } from './settings';
 import { isExtensionMessage, type ExtensionMessage } from '../shared/messages';
 import type { QueueResult, QueueSummary } from './translation-queue';
 
@@ -129,16 +129,17 @@ async function handleMessage(
       const session = sessionForTab(tabId);
       session.status = 'running';
       session.requestId = requestId;
-      session.selector = message.selector;
+      session.selector = message.selectors[0] ?? null;
       session.total = 0;
       session.completed = 0;
       session.failed = 0;
       await chrome.tabs.sendMessage(tabId, {
         type: 'START_TRANSLATION',
         requestId,
-        selector: message.selector,
+        selectors: message.selectors,
         sourceLang: message.sourceLang,
         targetLang: message.targetLang,
+        useSavedRules: message.useSavedRules ?? false,
       });
       return { type: 'RESULT_OK', requestId };
     }
@@ -204,7 +205,7 @@ async function handleMessage(
       const tab = await getActiveTab();
       const settings = await loadSettings();
       const session = sessionForTab(tab.id);
-      const rule = findRuleForUrl(settings.domainRules, tab.url ?? '');
+      const rules = findRulesForUrl(settings.domainRules, tab.url ?? '');
       let pageState: ExtensionMessage = {
         type: 'PAGE_STATE',
         translated: session.translated,
@@ -213,7 +214,7 @@ async function handleMessage(
         completed: session.completed,
         failed: session.failed,
         selector: session.selector,
-        rule,
+        rules,
       };
       try {
         await ensureContentScript(tab.id);
@@ -229,7 +230,7 @@ async function handleMessage(
             completed: contentState.completed,
             failed: contentState.failed,
             selector: contentState.selector ?? session.selector,
-            rule: contentState.rule ?? rule,
+            rules,
           };
         }
       } catch {

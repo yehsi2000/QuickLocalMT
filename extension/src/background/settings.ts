@@ -174,10 +174,10 @@ export function matchesPathPattern(pathPattern: string | undefined, pathname: st
   return false;
 }
 
-export function findRuleForUrl(rules: DomainRule[], url: string): DomainRule | null {
+export function findRulesForUrl(rules: DomainRule[], url: string): DomainRule[] {
   const hostname = hostnameFromUrl(url);
   if (hostname.length === 0) {
-    return null;
+    return [];
   }
   let pathname = '';
   try {
@@ -185,6 +185,7 @@ export function findRuleForUrl(rules: DomainRule[], url: string): DomainRule | n
   } catch {
     pathname = '';
   }
+  const matched: DomainRule[] = [];
   for (const rule of rules) {
     if (!rule.enabled) {
       continue;
@@ -195,9 +196,9 @@ export function findRuleForUrl(rules: DomainRule[], url: string): DomainRule | n
     if (!matchesPathPattern(rule.pathPattern, pathname)) {
       continue;
     }
-    return rule;
+    matched.push(rule);
   }
-  return null;
+  return matched;
 }
 
 export function langForRule(rule: DomainRule | null, settings: ExtensionSettings): {

@@ -2,7 +2,7 @@ import { DomTranslator } from './dom-translator';
 import { startPicker } from './element-picker';
 import { generateSelector } from './selector-generator';
 import { pageState } from './page-state';
-import { findRuleForUrl, hostnameFromUrl, loadSettings } from '../background/settings';
+import { findRulesForUrl, hostnameFromUrl, loadSettings } from '../background/settings';
 import {
   hideConfirm,
   hideProgress,
@@ -100,7 +100,7 @@ function boot(): void {
     }
     await chrome.runtime.sendMessage({
       type: 'TRANSLATE_SELECTOR',
-      selector: generated.selector,
+      selectors: [generated.selector],
       sourceLang,
       targetLang,
     });
@@ -109,16 +109,17 @@ function boot(): void {
   async function runTranslation(message: Extract<ExtensionMessage, { type: 'START_TRANSLATION' }>): Promise<void> {
     hideConfirm();
     const settings = await loadSettings();
-    const rule = findRuleForUrl(settings.domainRules, location.href);
+    const rules = message.useSavedRules ? findRulesForUrl(settings.domainRules, location.href) : [];
+    const entries =
+      rules.length > 0
+        ? rules.map((rule) => ({ selector: rule.selector, excludedSelectors: rule.excludedSelectors }))
+        : message.selectors.map((selector) => ({ selector, excludedSelectors: [] }));
     const result = await translator.start(
       message.requestId,
-      message.selector,
+      entries,
       message.sourceLang,
       message.targetLang,
-      {
-        maxChars: settings.textChunkMaxChars,
-        excludedSelectors: rule?.excludedSelectors ?? [],
-      },
+      { maxChars: settings.textChunkMaxChars },
     );
     if ('error' in result) {
       hideProgress();
@@ -168,7 +169,7 @@ function boot(): void {
           completed: progress.completed,
           failed: progress.failed,
           selector: null,
-          rule: null,
+          rules: [],
         });
         return;
       }
