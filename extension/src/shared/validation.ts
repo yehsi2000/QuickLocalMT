@@ -27,7 +27,7 @@ export function isValidSelector(value: unknown): value is string {
   if (selector.length === 0 || selector.length > 2048) {
     return false;
   }
-  if (/[<>]/.test(selector)) {
+  if (/</.test(selector)) {
     return false;
   }
   if (/[{}]/.test(selector)) {

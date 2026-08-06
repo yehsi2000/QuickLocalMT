@@ -105,4 +105,16 @@ describe('collectBlocks', () => {
     expect(blocks[0]?.text).toBe('Hello world');
     expect(blocks[0]?.nodes.length).toBe(1);
   });
+
+  it('assigns a unique id to every block', () => {
+    const container = containerWith(`
+      <p>First block</p>
+      <div><span>A</span><span>B</span><span>C</span></div>
+      <p>Second block</p>
+    `);
+    const blocks = collectBlocks(container, defaultOptions);
+    expect(blocks.length).toBeGreaterThan(1);
+    const ids = blocks.map((block) => block.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
 });

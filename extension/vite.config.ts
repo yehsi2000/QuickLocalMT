@@ -9,6 +9,7 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: true,
     target: 'chrome110',
+    modulePreload: false,
     rollupOptions: {
       input: {
         'service-worker': `${root}src/background/service-worker.ts`,

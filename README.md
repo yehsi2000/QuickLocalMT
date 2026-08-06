@@ -68,8 +68,7 @@ Open **Options → Translation provider** and pick the provider:
 
 In direct mode the extension builds the prompt and validates model output itself
 (repetition/echo/length guards with one retry), so the gateway is not required.
-Host permissions already cover `127.0.0.1`, `localhost`, and local `192.168.*` /
-`10.*` ranges on any port.
+Host permissions cover `127.0.0.1` and `localhost` on any port.
 
 ### 3. Build and load the extension
 

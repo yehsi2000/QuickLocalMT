@@ -111,13 +111,10 @@ function pushChunkedBlocks(
   nodes: Text[],
   text: string,
   maxChars: number,
-  prefix: string,
+  nextId: () => number,
 ): void {
-  let counter = 0;
-  const chunks = chunkText(text, maxChars);
-  for (const chunk of chunks) {
-    blocks.push({ id: `${prefix}-${counter}`, text: chunk, nodes });
-    counter += 1;
+  for (const chunk of chunkText(text, maxChars)) {
+    blocks.push({ id: `b${nextId()}`, text: chunk, nodes });
   }
 }
 
@@ -126,7 +123,6 @@ export function collectBlocks(container: Element, options: CollectOptions): Tran
   const groups = new Map<Element, Text[]>();
   const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
   let node: Node | null = walker.nextNode();
-  let groupIndex = 0;
   while (node) {
     const textNode = node as Text;
     if (isCollectable(textNode, container, options)) {
@@ -137,18 +133,18 @@ export function collectBlocks(container: Element, options: CollectOptions): Tran
     }
     node = walker.nextNode();
   }
+  let nextId = 0;
+  const id = (): number => nextId++;
   for (const [blockEl, nodes] of groups) {
-    const prefix = `b${groupIndex}`;
-    groupIndex += 1;
     const hasNestedFormatting = nodes.some((textNode) => textNode.parentElement !== blockEl);
     const combined = nodes.map((textNode) => textNode.nodeValue ?? '').join('');
     if (nodes.length === 1) {
-      pushChunkedBlocks(blocks, nodes, combined, options.maxChars, prefix);
+      pushChunkedBlocks(blocks, nodes, combined, options.maxChars, id);
     } else if (!hasNestedFormatting && combined.length <= options.maxChars) {
-      blocks.push({ id: prefix, text: combined, nodes });
+      blocks.push({ id: `b${id()}`, text: combined, nodes });
     } else {
       for (const textNode of nodes) {
-        pushChunkedBlocks(blocks, [textNode], textNode.nodeValue ?? '', options.maxChars, `${prefix}-n`);
+        pushChunkedBlocks(blocks, [textNode], textNode.nodeValue ?? '', options.maxChars, id);
       }
     }
   }

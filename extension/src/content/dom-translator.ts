@@ -69,7 +69,7 @@ export class DomTranslator {
     this.failedCount = 0;
     this.blocks = collected.map((block) => ({
       ...block,
-      originalText: block.nodes.map((node) => node.nodeValue ?? '').join(''),
+      originalText: block.text,
       appliedText: null,
     }));
     this.blocksById = new Map(this.blocks.map((block) => [block.id, block]));

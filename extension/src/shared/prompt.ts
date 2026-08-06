@@ -15,17 +15,24 @@ const LANGUAGE_NAMES: Record<string, string> = {
   ja: 'Japanese',
 };
 
-const PROMPT_TEMPLATE = `Translate from {source_lang} to {target_lang}.
+const PROMPT_TEMPLATE = `
+Translate the following text into {target_lang}. Note that you should only output the translated result without any additional explanation:
 
-Rules:
-- Return only the translation.
-- Do not explain the translation.
-- Do not repeat the source text.
-- Do not add headings, quotes, notes, or commentary.
-- Preserve line breaks when they carry meaning.
+{input_text}
+`
+// `
+// Translate from {source_lang} to {target_lang}.
 
-Text:
-{input_text}`;
+// Rules:
+// - Return only the translation.
+// - Do not explain the translation.
+// - Do not repeat the source text.
+// - Do not add headings, quotes, notes, or commentary.
+// - Preserve line breaks when they carry meaning.
+
+// Text:
+// {input_text}`;
+// `
 
 export function languageName(code: string): string {
   return LANGUAGE_NAMES[code] ?? code;

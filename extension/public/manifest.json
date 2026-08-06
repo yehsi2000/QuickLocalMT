@@ -10,9 +10,7 @@
   ],
   "host_permissions": [
     "http://127.0.0.1/*",
-    "http://localhost/*",
-    "http://192.168.*.*/*",
-    "http://10.*.*.*/*"
+    "http://localhost/*"
   ],
   "action": {
     "default_title": "Local Translator",
