@@ -93,6 +93,38 @@ Then in Chrome:
 5. Text blocks inside that container are translated in place; use **Restore original**
    any time to switch back.
 
+### 5. Per-site vocabulary (단어장)
+
+Per-site terminology (e.g. a game or novel site where `冒険者` must always become
+`모험가`) is stored **once per site** in a dedicated **Vocabulary** tab and
+applied in both translation paths:
+
+1. Open **Options → Vocabulary → Add vocabulary**.
+2. Enter the site hostname (e.g. `syosetu.example.com`) and add one mapping per
+   line: `source -> target` (also accepts `source → target`; lines starting with
+   `#` are comments).
+3. Save. Whenever a translation happens on that site, the vocabulary is written
+   into the prompt (stable order, so llama.cpp/Ollama KV caches are reused) and a
+   deterministic post-replacement step guarantees the terms always appear.
+
+The vocabulary is keyed by hostname — one per site, independent of how many
+selector rules exist for that site and of the translation direction. Up to 50
+entries per site; terms are 1–200 characters. No fine-tuning is needed —
+HY-MT1.5's native terminology-intervention prompt feature handles this.
+
+### 6. Translation history
+
+Every successful translation is logged:
+
+- **Gateway path**: appended to a JSONL file (`gateway/data/translation_log.jsonl`
+  by default, rotated at 200 MB). Disable with `LST_TRANSLATION_LOG_ENABLED=false`,
+  relocate with `LST_TRANSLATION_LOG_PATH=/path/to/log.jsonl`.
+- **Direct path (Ollama / llama.cpp)**: stored in the browser
+  (`chrome.storage.local`, most recent 2000 entries). Export or clear it from
+  **Options → Translation history**.
+
+This logged source/translation data is the future dataset for a per-site LoRA.
+
 ## How it stays safe
 
 - Text is extracted with a `TreeWalker` and sent as plain text — never `innerHTML`,

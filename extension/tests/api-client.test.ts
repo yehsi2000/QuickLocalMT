@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getProviderHealth, translateChunk } from '../src/background/api-client';
-import type { ExtensionSettings } from '../src/shared/types';
+import type { ExtensionSettings, GlossaryEntry } from '../src/shared/types';
 
 function makeSettings(overrides: Partial<ExtensionSettings> = {}): ExtensionSettings {
   return {
@@ -16,6 +16,7 @@ function makeSettings(overrides: Partial<ExtensionSettings> = {}): ExtensionSett
     textChunkMaxChars: 1200,
     autoUseSavedRule: false,
     domainRules: [],
+    siteGlossaries: [],
     ...overrides,
   };
 }
@@ -111,6 +112,52 @@ describe('translateChunk (direct providers)', () => {
     const result = await translateChunk(makeSettings({ provider: 'gateway' }), koreanRequest);
     expect(result).toBe('Hello.');
     expect(fetchMock.mock.calls[0]?.[0]).toBe('http://127.0.0.1:8000/translate');
+  });
+
+  it('sends the glossary to the direct provider and applies the safety-net replacement', async () => {
+    const glossary: GlossaryEntry[] = [
+      { source: '冒険者', target: '모험가' },
+      { source: '魔法使い', target: '마법사' },
+    ];
+    fetchMock.mockImplementation(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as { prompt: string };
+      expect(body.prompt).toContain('冒険者 -> 모험가');
+      expect(body.prompt).toContain('魔法使い -> 마법사');
+      return jsonResponse({ response: '모험가와 魔法使い는 여행을 했어.' });
+    });
+    const result = await translateChunk(makeSettings(), {
+      text: '冒険者と魔法使いは旅をした。',
+      source_lang: 'ja',
+      target_lang: 'ko',
+      glossary,
+    });
+    expect(result).toBe('모험가와 마법사는 여행을 했어.');
+  });
+
+  it('sends the glossary to the gateway without double-replacing', async () => {
+    const glossary: GlossaryEntry[] = [
+      { source: '冒険者', target: '모험가' },
+      { source: '魔法使い', target: '마법사' },
+    ];
+    let capturedBody: Record<string, unknown> | null = null;
+    fetchMock.mockImplementation(async (_url: string, init: RequestInit) => {
+      capturedBody = JSON.parse(String(init.body)) as Record<string, unknown>;
+      return jsonResponse({
+        translation: '모험가와 魔法使い는 여행을 했어.',
+        detected_source_lang: 'ja',
+        model: 'test',
+        attempts: 1,
+        warnings: [],
+      });
+    });
+    const result = await translateChunk(makeSettings({ provider: 'gateway' }), {
+      text: '冒険者と魔法使いは旅をした。',
+      source_lang: 'ja',
+      target_lang: 'ko',
+      glossary,
+    });
+    expect(result).toBe('모험가와 魔法使い는 여행을 했어.');
+    expect(capturedBody).toMatchObject({ glossary });
   });
 });
 

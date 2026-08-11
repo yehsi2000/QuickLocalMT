@@ -1,5 +1,9 @@
+import json
 import logging
+from datetime import datetime, timezone
+from pathlib import Path
 
+from .glossary import apply_glossary_replacement
 from .model_client import ModelClient, ModelClientError, ModelOptions
 from .output_validator import OutputValidationError, clean_output, validate_translation
 from .prompt_builder import build_translation_prompt
@@ -13,7 +17,7 @@ DEFAULT_OPTIONS: ModelOptions = {
     "top_k": 40,
     "repeat_penalty": 1.08,
     "repeat_last_n": 96,
-    "num_ctx": 2048,
+    "num_ctx": 4096,
 }
 
 RETRY_OPTIONS: ModelOptions = {
@@ -22,11 +26,12 @@ RETRY_OPTIONS: ModelOptions = {
     "top_k": 40,
     "repeat_penalty": 1.12,
     "repeat_last_n": 96,
-    "num_ctx": 2048,
+    "num_ctx": 4096,
 }
 
 MIN_OUTPUT_TOKENS = 128
 OUTPUT_RATIO = 1.6
+MAX_LOG_BYTES = 200 * 1024 * 1024
 
 
 class TranslationError(Exception):
@@ -55,8 +60,9 @@ class TranslationService:
         source_lang: str,
         target_lang: str,
         preset: str = "translation-default",
+        glossary: list | None = None,
     ) -> dict:
-        prompt = build_translation_prompt(text, source_lang, target_lang)
+        prompt = build_translation_prompt(text, source_lang, target_lang, glossary)
         budget = compute_output_token_budget(text, self.settings.max_output_tokens)
         attempts = 0
         warnings: list[str] = []
@@ -77,11 +83,50 @@ class TranslationService:
                     raise TranslationError(exc.code, exc.message) from exc
                 warnings.append(exc.message)
                 continue
-            return {
+            cleaned = apply_glossary_replacement(cleaned, glossary)
+            result = {
                 "translation": cleaned,
                 "detected_source_lang": source_lang,
                 "model": self.settings.ollama_model,
                 "attempts": attempts,
                 "warnings": warnings,
             }
+            self._record_pair(text, source_lang, target_lang, cleaned, attempts, warnings, glossary)
+            return result
         raise TranslationError("TRANSLATION_FAILED", "Translation failed after retries")
+
+    def _record_pair(
+        self,
+        text: str,
+        source_lang: str,
+        target_lang: str,
+        translation: str,
+        attempts: int,
+        warnings: list[str],
+        glossary: list | None,
+    ) -> None:
+        if not self.settings.translation_log_enabled:
+            return
+        entry = {
+            "ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+            "source_lang": source_lang,
+            "target_lang": target_lang,
+            "source_text": text,
+            "translation": translation,
+            "model": self.settings.ollama_model,
+            "attempts": attempts,
+            "warnings": warnings,
+            "glossary_count": len(glossary or []),
+        }
+        try:
+            self._append_log(entry)
+        except Exception as exc:  # noqa: BLE001 - logging must never break translation
+            logger.warning("failed to write translation log entry: %s", exc)
+
+    def _append_log(self, entry: dict) -> None:
+        path = Path(self.settings.translation_log_path)
+        if path.exists() and path.stat().st_size > MAX_LOG_BYTES:
+            path.rename(path.with_suffix(".1.jsonl"))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")

@@ -149,9 +149,16 @@ Request:
   "text": "번역할 순수 텍스트",
   "source_lang": "ko",
   "target_lang": "en",
-  "preset": "translation-default"
+  "preset": "translation-default",
+  "glossary": [
+    { "source": "冒険者", "target": "모험가" },
+    { "source": "魔法使い", "target": "마법사" }
+  ]
 }
 ```
+
+`glossary` is optional, at most 50 entries, each `source`/`target` trimmed and
+1–200 characters (422 otherwise). The response schema is unchanged.
 
 Response:
 
@@ -180,11 +187,12 @@ Failure:
 
 | Module | Responsibility |
 | :-- | :-- |
-| `schemas.py` | Request/response validation (pydantic) |
+| `schemas.py` | Request/response validation (pydantic), glossary schema |
 | `settings.py` | Environment configuration (`LST_*` prefix) |
-| `prompt_builder.py` | Deterministic translation prompt |
+| `prompt_builder.py` | Deterministic translation prompt (glossary prefix) |
+| `glossary.py` | Glossary sort/render/replace helpers (pure functions) |
 | `model_client.py` | `ModelClient` protocol + `OllamaClient` |
-| `translation_service.py` | Orchestration, retry policy, token budget |
+| `translation_service.py` | Orchestration, retry policy, token budget, pair logging |
 | `output_validator.py` | Validation gate + output cleanup |
 | `repetition_detector.py` | Repetition/echo/leakage heuristics |
 | `main.py` | FastAPI app, CORS, error mapping |
@@ -192,12 +200,77 @@ Failure:
 ### Generation policy
 
 - Default sampling: `temperature 0.1`, `top_p 0.9`, `top_k 40`,
-  `repeat_penalty 1.08`, `repeat_last_n 96`, `num_ctx 2048`.
+  `repeat_penalty 1.08`, `repeat_last_n 96`, `num_ctx 4096`.
 - Output budget is derived from the input (`~1.6 × source tokens`), floored at
   128 tokens and capped at 1024, so the model does not ramble after finishing.
 - On validation failure the gateway retries once with `temperature 0.15`,
   `repeat_penalty 1.12`, and a reduced output cap. It never applies a known
   repetitive result.
+
+## Glossary (site-scoped terminology)
+
+Primary translation direction is **Japanese → Korean**; English ↔ Korean remains
+supported via the existing language codes.
+
+### Design
+
+- **Data model.** A glossary lives on `ExtensionSettings.siteGlossaries`
+  (`SiteGlossary { hostname, glossary: [{ source, target }] }`, max 50 entries
+  per site). It is keyed by hostname — one per site, independent of selector
+  rules. The extension sanitizes stored glossaries (`normalizeGlossary`),
+  dedupes by `source` (first occurrence wins) and caps at 50 before sending.
+  Legacy per-rule `glossary` fields are migrated into the site glossary on load.
+- **Site scoping.** A translation on a hostname always receives that site's
+  glossary, regardless of which selector rule matched or the translation
+  direction. This keeps the vocabulary predictable — one set of terms per site.
+- **Two identical code paths.** Both prompt builders are updated together —
+  `gateway/app/prompt_builder.py` (gateway path) and
+  `extension/src/shared/prompt.ts` (direct Ollama/llama.cpp path). The shared
+  helpers `gateway/app/glossary.py` / `extension/src/shared/glossary.ts` are kept
+  byte-compatible (same rendering and replacement vectors, see the test suites).
+- **Prompt prefix.** When a glossary is present the prompt starts with the
+  terminology block:
+
+  ```text
+  Refer to the following translations:
+  冒険者 -> 모험가
+  魔法使い -> 마법사
+
+  Translate from Japanese to Korean.
+  ...
+  ```
+
+  Entries are rendered in **stable sorted order** (by `source`, code-point
+  order) so every request for the same site has an identical prefix — this keeps
+  llama.cpp's prompt/KV cache and Ollama's `keep_alive` cache hit on the 8 GB
+  box. Empty glossary renders exactly today's prompt (backward compatible).
+  Tail entries are dropped past 4000 chars of rendered block (never mid-entry).
+- **Safety net.** After output validation, `apply_glossary_replacement` replaces
+  any leftover *source* term with its *target* (longest source first; pure-ASCII
+  sources use `\b…\b` word boundaries + case-insensitive; Japanese/Korean/CJK
+  sources match as substrings — Japanese has no spaces). Idempotent: target terms
+  are never re-matched.
+- **No fine-tuning / LoRA.** HY-MT1.5's native terminology-intervention prompt
+  feature is used instead. LoRA is deferred until ≥ ~1000 logged pairs per site
+  exist *and* prompt+post-replace is shown insufficient. See `plan.md` §12.
+
+### Logging (future LoRA dataset)
+
+- **Gateway path:** every successful translation is appended to a JSONL file
+  (`gateway/data/translation_log.jsonl`, `LST_TRANSLATION_LOG_PATH` to move,
+  `LST_TRANSLATION_LOG_ENABLED=false` to disable; rotated at 200 MB). Failures
+  are swallowed so logging never breaks translation.
+- **Direct path:** the service worker buffers entries in
+  `chrome.storage.local` (`translationHistory`, capped at 2000, oldest dropped).
+  Options exposes **Export history (JSONL)** and **Clear history**.
+
+### A/B: Chinese template vs English adaptation
+
+The official HY-MT template is Chinese; v1 ships the English adaptation above.
+An A/B comparison of the two on 10 ja→ko sentences with a 10-term glossary is
+planned (`plan.md` §10.6); the winner will be recorded here. If the Chinese
+template wins, the block in `plan.md` §7 and both prompt builders/tests are
+switched accordingly.
 
 ### Validation rules
 

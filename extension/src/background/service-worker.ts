@@ -1,8 +1,15 @@
 import { getProviderHealth, translateChunk } from './api-client';
-import { TranslationQueue } from './translation-queue';
-import { addDomainRule, findRulesForUrl, loadSettings } from './settings';
+import { addHistoryEntry } from './history';
+import { TranslationQueue, type QueueResult, type QueueSummary } from './translation-queue';
+import {
+  addDomainRule,
+  findRulesForUrl,
+  hostnameFromUrl,
+  loadSettings,
+  siteGlossaryForHostname,
+} from './settings';
 import { isExtensionMessage, type ExtensionMessage } from '../shared/messages';
-import type { QueueResult, QueueSummary } from './translation-queue';
+import type { GlossaryEntry } from '../shared/types';
 
 type SessionState = {
   status: 'idle' | 'running';
@@ -65,6 +72,8 @@ async function ensureContentScript(tabId: number): Promise<void> {
 function queueForTab(
   tabId: number,
   settings: Awaited<ReturnType<typeof loadSettings>>,
+  glossary: GlossaryEntry[],
+  hostname: string,
 ): TranslationQueue {
   let queue = queues.get(tabId);
   if (!queue) {
@@ -78,6 +87,7 @@ function queueForTab(
             source_lang: sourceLang,
             target_lang: targetLang,
             preset: 'translation-default',
+            ...(glossary.length > 0 ? { glossary } : {}),
           },
           signal,
         ),
@@ -91,6 +101,16 @@ function queueForTab(
             : { error: result.error }),
         };
         void chrome.tabs.sendMessage(tabId, message).catch(() => undefined);
+        if (result.ok && hostname.length > 0) {
+          void addHistoryEntry({
+            ts: new Date().toISOString(),
+            hostname,
+            source_lang: result.sourceLang,
+            target_lang: result.targetLang,
+            source_text: result.sourceText,
+            translation: result.translation,
+          });
+        }
       },
       onComplete: (summary: QueueSummary) => {
         const session = sessionForTab(tabId);
@@ -245,7 +265,9 @@ async function handleMessage(
       }
       const tabId = sender.tab.id;
       const settings = await loadSettings();
-      const queue = queueForTab(tabId, settings);
+      const hostname = hostnameFromUrl(sender.tab.url ?? '');
+      const glossary = siteGlossaryForHostname(settings.siteGlossaries, hostname);
+      const queue = queueForTab(tabId, settings, glossary, hostname);
       queue.runSession(
         message.blocks.map((block) => ({
           requestId: message.requestId,

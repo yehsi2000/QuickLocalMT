@@ -2,6 +2,16 @@ export type LangCode = 'auto' | 'ko' | 'en' | 'ja';
 
 export type ProviderKind = 'gateway' | 'ollama' | 'llamacpp';
 
+export type GlossaryEntry = {
+  source: string;
+  target: string;
+};
+
+export type SiteGlossary = {
+  hostname: string;
+  glossary: GlossaryEntry[];
+};
+
 export type ExtensionSettings = {
   provider: ProviderKind;
   gatewayBaseUrl: string;
@@ -15,6 +25,7 @@ export type ExtensionSettings = {
   textChunkMaxChars: number;
   autoUseSavedRule: boolean;
   domainRules: DomainRule[];
+  siteGlossaries: SiteGlossary[];
 };
 
 export type DomainRule = {
@@ -47,6 +58,7 @@ export type GatewayTranslateRequest = {
   source_lang: string;
   target_lang: string;
   preset?: string;
+  glossary?: GlossaryEntry[];
 };
 
 export type GatewayTranslateResponse = {

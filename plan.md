@@ -1,957 +1,428 @@
-# Local Selector Translator — Implementation Plan
+# Site-Scoped Glossary — Implementation Plan
 
-## 1. Goal
+> Replaces the original v1 implementation plan, which is preserved at
+> `plan-v1.md`. This plan is self-contained: another agent (e.g. a
+> mobile-linked session) should be able to execute it end-to-end without
+> asking the user questions.
 
-Build a Chrome Extension (Manifest V3) that translates only user-selected parts
-of a web page using a locally hosted LLM translation API.
+## 1. Background & Context
 
-Primary use case:
-- Browser page translation similar to Google Translate/Sider.
-- The user selects a container element once.
-- The extension stores a site/page rule using a CSS selector.
-- Only human-readable text nodes inside that selected element are translated.
-- The original DOM structure, links, images, styles, and events remain intact.
-- The extension calls a local translation API running on the user's desktop/server.
-- The LLM must never receive complete raw HTML.
+- Project: Chrome MV3 extension + local translation runtime. The extension
+  saves per-site CSS-selector rules, extracts text nodes inside the selected
+  area, and translates them via a local model.
+- Model: **HY-MT1.5-1.8B** (Tencent Hunyuan translation model; Ollama tag
+  `hy-mt:1.5b`). Runs on a PC with **8 GB VRAM**; translation speed is a
+  hard requirement (real-time page translation), so we keep the small model.
+- **Primary translation direction: Japanese -> Korean (ja -> ko).**
+  English <-> Korean still supported by the existing lang codes
+  (`auto | ko | en | ja`), no language-code changes needed.
+- Goal: per-site **glossary / terminology** translation (e.g. a game or
+  novel site where `冒険者` must always become `모험가`).
 
-Initial target:
-- Korean <-> English translation.
-- Local model: HY-MT1.5B or another dedicated translation model.
-- Backend: Ollama initially, but hide it behind a custom FastAPI gateway.
-- Browser: Google Chrome, Manifest V3 only.
+### Key decision (already made, do not reverse)
 
-Non-goals for v1:
-- Full-page automatic translation for every website.
-- OCR for text embedded in images.
-- Translation of PDF viewer canvases.
-- Cloud API support.
-- Syncing settings across devices.
-- Supporting Firefox/Safari.
+Use the model's **native terminology-intervention feature** (prompt-based
+glossary) plus a deterministic post-replacement safety net.
 
----
+**No fine-tuning / LoRA at this stage.** Rationale:
 
-## 2. Design Principles
+- HY-MT1.5-1.8B was *trained* with terminology-in-prompt ("terminology
+  intervention" is a documented, first-class feature of the model, shared
+  by both the 1.8B and 7B variants). Throwing a glossary at it is exactly
+  what it is built for.
+- For a handful of sites with a few dozen terms each, prompt + post-edit
+  fully covers the need; LoRA would be over-engineering and risks degrading
+  the model's translation quality (catastrophic forgetting with small data).
+- We still lay the groundwork for a future LoRA by **logging
+  source/translation pairs** (see §9). LoRA only becomes relevant once
+  >= ~1000 logged pairs per site exist *and* prompt+post-replace has been
+  proven insufficient (e.g. site-specific style/format, not just terms).
 
-1. Do not send HTML to the model.
-   - Extract text nodes only.
-   - Never use `innerHTML` to write translated results.
-   - Restore/replace using `Text.nodeValue` only.
+References: https://github.com/Tencent-Hunyuan/HY-MT ,
+https://huggingface.co/tencent/HY-MT1.5-1.8B (official terminology prompt
+template quoted in §7).
 
-2. Keep prompts extremely small and deterministic.
-   - The browser sends `{ sourceLang, targetLang, text }`.
-   - The backend generates the model-specific prompt/template.
-   - The model must return translation text only.
-   - Do not ask the model to explain, summarize, preserve HTML, or discuss text.
+## 2. Non-Goals (v1)
 
-3. Build for unreliable small LLMs.
-   - Enforce output token limit.
-   - Detect repetition before applying output.
-   - Retry once with adjusted settings.
-   - Split failing text into smaller chunks.
-   - Preserve original text at all times.
+- Fine-tuning / LoRA (deferred, see §12).
+- Global (non-site) glossary; per-site rules only.
+- Direction-aware glossary pairs (separate ja->ko vs ko->ja mappings in the
+  same rule). One mapping per rule; entries are written for the user's
+  usual direction. Noted as a limitation in the options UI copy.
+- Cloud sync of glossaries.
+- Glossary term auto-suggestion / mining from logs.
 
-4. Make site-specific setup explicit.
-   - The user must select a target region or enter a CSS selector.
-   - Do not attempt fragile universal article detection in v1.
+## 3. Architecture Overview
 
-5. Keep all secrets and model logic server-side.
-   - The extension must not expose an Ollama API key or model-specific prompt.
-   - The extension talks only to a local `/translate` gateway endpoint.
+### 3.1 Two translation paths — CRITICAL
 
----
+There are **two independent code paths** that build prompts and validate
+output. BOTH must be updated identically or the feature will silently not
+work in one configuration:
 
-## 3. Architecture
+| Path | When used | Prompt built by | Post-replace by | Pair logging by |
+|---|---|---|---|---|
+| A. Gateway | `provider: "gateway"` | `gateway/app/prompt_builder.py` | `gateway/app/glossary.py` | gateway JSONL file |
+| B. Direct | `provider: "ollama"` \| `"llamacpp"` | `extension/src/shared/prompt.ts` | `extension/src/shared/glossary.ts` | extension storage buffer |
 
-```text
-┌────────────────────────────────────────────────────┐
-│ Chrome Extension                                    │
-│                                                    │
-│ popup / side panel                                 │
-│  - Select area                                     │
-│  - Save selector                                   │
-│  - Choose language/model preset                    │
-│  - Translate / restore / cancel                    │
-│                                                    │
-│ content script                                     │
-│  - Element picking overlay                         │
-│  - CSS selector generation                         │
-│  - DOM text-node extraction                        │
-│  - Safe text replacement                           │
-│  - Per-page translation state                      │
-│                                                    │
-│ service worker                                     │
-│  - Settings via chrome.storage                     │
-│  - Request queue and concurrency limit             │
-│  - Fetch local API                                 │
-│  - Retry/error policy                              │
-└───────────────────┬────────────────────────────────┘
-                    │ HTTP JSON
-                    ▼
-┌────────────────────────────────────────────────────┐
-│ Local Translation Gateway: FastAPI                  │
-│                                                    │
-│ POST /translate                                    │
-│  - Validate request                                │
-│  - Build translation-model prompt/template         │
-│  - Call Ollama or llama.cpp endpoint               │
-│  - Apply model options                             │
-│  - Validate output and detect repetition           │
-│  - Return normalized translation                   │
-└───────────────────┬────────────────────────────────┘
-                    ▼
-┌────────────────────────────────────────────────────┐
-│ Local Model Runtime                                │
-│ Ollama initially; llama.cpp server can be added    │
-│ HY-MT1.5B or dedicated translation model           │
-└────────────────────────────────────────────────────┘
-```
+The user's main setup is **Path B (direct llama.cpp)**, so Path B must be
+fully functional on its own — do not ship Path A-only.
 
-The extension must use Manifest V3 service workers, not deprecated background
-pages. Register message listeners synchronously at the top level because service
-workers can stop and restart at any time.
-
----
-
-## 4. Repository Layout
+### 3.2 Data flow
 
 ```text
-local-selector-translator/
-├─ extension/
-│  ├─ manifest.json
-│  ├─ src/
-│  │  ├─ background/
-│  │  │  ├─ service-worker.ts
-│  │  │  ├─ api-client.ts
-│  │  │  ├─ translation-queue.ts
-│  │  │  └─ settings.ts
-│  │  ├─ content/
-│  │  │  ├─ content-script.ts
-│  │  │  ├─ element-picker.ts
-│  │  │  ├─ selector-generator.ts
-│  │  │  ├─ text-node-collector.ts
-│  │  │  ├─ dom-translator.ts
-│  │  │  └─ page-state.ts
-│  │  ├─ popup/
-│  │  │  ├─ popup.html
-│  │  │  ├─ popup.ts
-│  │  │  └─ popup.css
-│  │  ├─ options/
-│  │  │  ├─ options.html
-│  │  │  └─ options.ts
-│  │  └─ shared/
-│  │     ├─ types.ts
-│  │     ├─ messages.ts
-│  │     ├─ validation.ts
-│  │     └─ text-utils.ts
-│  ├─ package.json
-│  ├─ tsconfig.json
-│  └─ vite.config.ts
-│
-├─ gateway/
-│  ├─ app/
-│  │  ├─ main.py
-│  │  ├─ schemas.py
-│  │  ├─ settings.py
-│  │  ├─ translation_service.py
-│  │  ├─ model_client.py
-│  │  ├─ prompt_builder.py
-│  │  ├─ output_validator.py
-│  │  └─ repetition_detector.py
-│  ├─ tests/
-│  ├─ requirements.txt
-│  ├─ Dockerfile
-│  └─ docker-compose.yml
-│
-├─ docs/
-│  ├─ architecture.md
-│  ├─ local-development.md
-│  ├─ selector-rules.md
-│  └─ troubleshooting.md
-│
-├─ README.md
-└─ plan.md
+chrome.storage.local
+  DomainRule { hostname, selector, ..., glossary: [{source, target}] }
+        │  (edited in options page)
+        ▼
+service-worker: TRANSLATE_BLOCKS handler
+  rules = findRulesForUrl(settings.domainRules, tab.url)
+  mergedGlossary = mergeGlossaries(rules)   // dedupe by source, cap 50
+        │
+        ▼
+queue translate closure ──► GatewayTranslateRequest { text, langs, glossary }
+        │
+        ▼
+prompt builder (gateway OR extension)        prompt = renderGlossaryBlock(...) + instruction + text
+        │  (stable order → KV-cache reuse)
+        ▼
+model (Ollama / llama.cpp) ──► raw output ──► clean + validate ──►
+        applyGlossaryReplacement(output, glossary)   // safety net
+        ▼
+translated text ──► DOM
+        │
+        ▼
+pair logging (gateway JSONL AND/OR extension storage buffer)
 ```
 
-Use TypeScript in the extension and Python 3.12+ with FastAPI in the gateway.
+## 4. Design Decisions
 
----
+- **D1. Glossary lives on `DomainRule`** (site-scoped, matching how the
+  user thinks about sites). Entry: `GlossaryEntry { source: string, target:
+  string }`. Max **50 entries per rule** — enforced in extension sanitize,
+  gateway schema validation, and prompt rendering (truncation guard).
+- **D2. Glossary block is always the prompt prefix, in stable sorted
+  order** (sort by `source`, byte order). Every request for the same site
+  then has an identical prefix → llama.cpp prompt/KV cache and Ollama cache
+  (keep_alive already `5m`) reuse the prefix for free. This is what keeps
+  speed acceptable on the 8 GB box.
+- **D3. Prompt template** = HY-MT official terminology format, English
+  adaptation (verbatim in §7). Run the A/B check in §10.6 and record the
+  winner in `docs/architecture.md`.
+- **D4. Safety-net post-replacement**: after the raw output passes
+  validation, replace any *source* term still present in the output with
+  its *target* term (longest-first, case-insensitive for ASCII, no word
+  boundaries for Japanese — Japanese text has no spaces). Deterministic
+  and cheap; LLMs alone cannot guarantee terminology consistency.
+- **D5. num_ctx 2048 → 4096** in both paths (gateway
+  `DEFAULT_OPTIONS`/`RETRY_OPTIONS`, extension
+  `DEFAULT_GENERATION_OPTIONS`/`RETRY_GENERATION_OPTIONS`) so the glossary
+  prefix + up-to-1200-char text fit comfortably. 1.8B Q4 KV cache at 4096
+  ctx is well within 8 GB.
+- **D6. Pair logging in both paths** (§9): gateway appends JSONL; extension
+  buffers history in `chrome.storage.local` (capped, exportable) so Path B
+  usage is captured too. This is the future LoRA dataset.
 
-## 5. Extension Requirements
+## 5. API Contract Changes
 
-### 5.1 Manifest V3
-
-Use the minimum required permissions:
-
-```json
-{
-  "manifest_version": 3,
-  "name": "Local Selector Translator",
-  "version": "0.1.0",
-  "description": "Translate selected web-page regions using a local LLM.",
-  "permissions": [
-    "activeTab",
-    "scripting",
-    "storage"
-  ],
-  "host_permissions": [
-    "http://127.0.0.1:8000/*",
-    "http://localhost:8000/*",
-    "http://192.168.0.0/16/*",
-    "http://10.0.0.0/8/*"
-  ],
-  "action": {
-    "default_title": "Local Translator",
-    "default_popup": "popup.html"
-  },
-  "background": {
-    "service_worker": "service-worker.js",
-    "type": "module"
-  }
-}
-```
-
-Notes:
-
-- Prefer `activeTab` and explicit user action over `<all_urls>` host permission.
-- Use `chrome.scripting.executeScript()` to inject the content script on demand.
-- Add a side panel only after the MVP works.
-- Do not request broad permissions unless necessary.
-
-
-### 5.2 Persistent Settings
-
-Store these values in `chrome.storage.local`:
+### 5.1 `DomainRule` (extension storage)
 
 ```ts
-type ExtensionSettings = {
-  gatewayBaseUrl: string;        // Default: http://127.0.0.1:8000
-  defaultSourceLang: string;    // Default: auto
-  defaultTargetLang: string;    // Default: en
-  concurrency: number;          // Default: 2
-  textChunkMaxChars: number;    // Default: 1200
-  autoUseSavedRule: boolean;    // Default: false
-  domainRules: DomainRule[];
-};
+type GlossaryEntry = { source: string; target: string };
 
 type DomainRule = {
-  id: string;
-  hostname: string;
-  pathPattern?: string;
-  selector: string;
-  excludedSelectors: string[];
-  sourceLang?: string;
-  targetLang?: string;
-  createdAt: string;
-  updatedAt: string;
+  // ...existing fields unchanged...
+  glossary?: GlossaryEntry[];   // new, optional; absent/undefined == []
 };
 ```
 
-The user must be able to:
+### 5.2 Translate request (both TS and Pydantic)
 
-- Change gateway URL.
-- Set default source/target language.
-- Set concurrency from 1 to 4.
-- View, edit, disable, and delete saved selector rules.
-- Test a CSS selector against the currently active page.
-
----
-
-## 6. User Flow
-
-### 6.1 First Use
-
-1. User opens a page.
-2. User clicks extension toolbar button.
-3. Popup shows:
-    - `Select translation area`
-    - `Use saved rule`
-    - Source language
-    - Target language
-    - Gateway connection status
-4. User clicks `Select translation area`.
-5. Content script enters picker mode.
-6. Hovered DOM element gets a visible outline.
-7. User clicks an article/content container.
-8. Extension generates and previews a CSS selector.
-9. User confirms:
-    - `Translate once`
-    - Optional: `Save for this site`
-10. The extension extracts text nodes and translates them.
-11. Popup displays progress: `12 / 38 blocks translated`.
-12. User can click `Restore original` or `Cancel`.
-
-### 6.2 Saved Rule Use
-
-1. User opens a matching page.
-2. User clicks extension.
-3. The saved CSS selector is shown.
-4. User clicks `Translate selected area`.
-5. The extension applies it only to the selected container.
-
-Do not auto-translate on page load in v1.
-
----
-
-## 7. Text Extraction Rules
-
-### 7.1 Allowed Nodes
-
-Collect only `Text` nodes via `TreeWalker`.
-
-Skip nodes whose parent or ancestor is one of:
-
-```text
-SCRIPT
-STYLE
-NOSCRIPT
-TEMPLATE
-SVG
-CANVAS
-CODE
-PRE
-KBD
-SAMP
-TEXTAREA
-INPUT
-SELECT
-OPTION
-BUTTON
+```json
+{
+  "text": "...",
+  "source_lang": "ja",
+  "target_lang": "ko",
+  "preset": "translation-default",
+  "glossary": [
+    { "source": "冒険者", "target": "모험가" },
+    { "source": "魔法使い", "target": "마법사" }
+  ]
+}
 ```
 
-Also skip:
+- `glossary` optional; max 50 entries; each `source`/`target` trimmed,
+  1..200 chars, non-blank; reject (422) otherwise. Response schema
+  **unchanged**.
 
-- Empty or whitespace-only text.
-- Text inside `[contenteditable="true"]`.
-- Text inside elements with `aria-hidden="true"`.
-- Text inside extension-owned overlay/UI.
-- Elements matching configured `excludedSelectors`.
-- Nodes already marked as translated.
-- Nodes under hidden containers, when practical.
+## 6. Implementation Steps (file-by-file)
 
+### Phase 1 — Gateway (Path A)
 
-### 7.2 DOM Safety
+1. **`gateway/app/schemas.py`**
+   - Add `class GlossaryEntry(BaseModel)` with `source`/`target`:
+     `str = Field(..., min_length=1, max_length=200)` + strip validator.
+   - Add `glossary: list[GlossaryEntry] = []` to `TranslateRequest` with a
+     validator capping at 50 entries (raise `ValueError` → 422).
+2. **`gateway/app/glossary.py`** (new module, pure functions, no I/O)
+   - `sort_glossary(glossary) -> list[GlossaryEntry]` — stable sort by
+     `source` (byte/UTF-8 order via Python `sorted` on the string).
+   - `render_glossary_block(glossary, max_chars=4000) -> str` — renders the
+     §7 block; adds entries in sorted order while rendered length <
+     `max_chars`; drops tail entries (never truncates a mid-way entry).
+   - `apply_glossary_replacement(output: str, glossary) -> str` — algorithm
+     in §8.
+3. **`gateway/app/prompt_builder.py`**
+   - `build_translation_prompt(text, source_lang, target_lang, glossary=None)`
+   - Empty/None glossary → output identical to today's prompt (backward
+     compat, existing tests must still pass).
+   - With glossary → `render_glossary_block(...) + "\n" + instruction block`.
+     Instruction tail = English adaptation in §7 (same as current
+     `PROMPT_TEMPLATE` tail, keep the "Rules:" list).
+4. **`gateway/app/translation_service.py`**
+   - `translate(..., glossary: list | None = None)`; pass to prompt builder.
+   - After `validate_translation` succeeds: `cleaned =
+     apply_glossary_replacement(cleaned, glossary)` before returning.
+   - Log the pair (§9) on success; never raise on log failure (log + continue).
+5. **`gateway/app/settings.py`**
+   - `translation_log_enabled: bool = True`
+   - `translation_log_path: str = "data/translation_log.jsonl"`
+6. **`gateway/app/main.py`** — pass `payload.glossary` into
+   `current_service.translate(...)`.
+7. **`gateway/.gitignore`** — add `data/`.
 
-Never:
+### Phase 2 — Extension shared (Path B primitives)
 
-- Send `outerHTML` or `innerHTML` to the server.
-- Assign translated output to `innerHTML`.
-- Replace an element when only a text node needs translation.
-- Translate attributes in v1, including `title`, `alt`, `placeholder`, or `aria-label`.
+1. **`extension/src/shared/types.ts`**
+   - Add `GlossaryEntry`; `DomainRule.glossary?: GlossaryEntry[]`;
+     `GatewayTranslateRequest.glossary?: GlossaryEntry[]`.
+2. **`extension/src/shared/validation.ts`**
+   - `isGlossaryEntry(value): value is GlossaryEntry`
+   - `normalizeGlossary(value): GlossaryEntry[]` — filter invalid, trim,
+     dedupe by `source` (first wins), cap 50.
+3. **`extension/src/shared/prompt.ts`**
+   - `buildTranslationPrompt(text, sourceLang, targetLang, glossary: GlossaryEntry[] = [])`
+   - Same template + ordering + truncation guard as the gateway version.
+   - Bump `num_ctx` 2048 → 4096 in `DEFAULT_GENERATION_OPTIONS` /
+     `RETRY_GENERATION_OPTIONS`.
+4. **`extension/src/shared/glossary.ts`** (new)
+   - Mirror of `gateway/app/glossary.py`: `sortGlossary`,
+     `renderGlossaryBlock`, `applyGlossaryReplacement`. Keep the two
+     implementations byte-compatible (shared test vectors in §10).
 
-Only mutate:
+### Phase 3 — Extension wiring (Path B)
+
+1. **`extension/src/background/settings.ts`**
+   - `sanitizeRule`: add `glossary: normalizeGlossary(value.glossary)`.
+     Old stored rules without the field sanitize to `[]` — no migration.
+   - `DEFAULT_SETTINGS` unchanged (rules start with no glossary).
+2. **`extension/src/background/history.ts`** (new)
+   - Storage key `translationHistory`, array capped at **2000** entries
+     (drop oldest). Entry shape in §9.
+   - `addHistoryEntry(entry)`, `getHistory()`, `clearHistory()`,
+     `exportHistoryJsonl(): string`.
+3. **`extension/src/background/service-worker.ts`**
+   - In the `TRANSLATE_BLOCKS` handler (has `sender.tab`): compute
+     `rules = findRulesForUrl(settings.domainRules, sender.tab.url ?? '')`,
+     `mergedGlossary = normalizeGlossary(rules.flatMap(r => r.glossary ?? []))`
+     (dedupe by source, first rule wins, cap 50).
+   - `queueForTab(tabId, settings, glossary, hostname)`: extend the queue's
+     `translate` closure to include `glossary` in the request, and after a
+     successful result fire-and-forget
+     `addHistoryEntry({ ts, hostname, source_lang, target_lang, source_text, translation })`
+     (never block translation on history writes; `.catch(() => {})`).
+4. **`extension/src/background/api-client.ts`**
+   - `translateWithValidation`: build prompt with `request.glossary`;
+     after validation passes, `cleaned = applyGlossaryReplacement(cleaned,
+     request.glossary)` (this covers direct Ollama and llama.cpp).
+   - `translateChunk`: gateway branch unchanged — the gateway performs its
+     own replacement; do NOT double-replace (harmless but wasteful).
+
+### Phase 4 — Options UI
+
+1. **`extension/src/options/options.ts`** (+ `.html`, `.css` as needed)
+   - Per-rule **glossary editor**: a `<textarea>` where each line is
+     `term -> term` (also accept `term → term`; `#`-prefixed lines are
+     comments). Parse + validate with `normalizeGlossary`; show live
+     "N terms" count and per-line errors; save via
+     `updateDomainRule(id, { glossary })`.
+   - UI copy notes the mapping is for the rule's translation direction.
+   - **History section**: "Export history (JSONL)" button (Blob download)
+     and "Clear history" button wired to `history.ts`.
+
+### Phase 5 — Tests & Docs
+
+Gateway (pytest, `cd gateway && python -m pytest`):
+
+- `tests/test_prompt_builder.py` — extend: glossary block rendered with
+  stable order; empty glossary == old prompt exactly; truncation guard.
+- `tests/test_glossary.py` (new) — §8 vectors: longest-first, ASCII
+  word-boundary, Japanese substring, case-insensitivity, no-op empty.
+- `tests/test_schemas.py` — glossary: >50 entries → 422, blank source →
+  422, valid ok, absent ok.
+- `tests/test_translation_service.py` — glossary flows into prompt and
+  post-replacement applied (mock client); success pair written to JSONL
+  (`tmp_path` + settings override).
+
+Extension (vitest, `cd extension && npm test`):
+
+- `tests/prompt.test.ts` — extend: glossary block, stable order, empty
+  unchanged.
+- `tests/glossary.test.ts` (new) — same vectors as gateway
+  `test_glossary.py` (share fixtures where practical).
+- `tests/api-client.test.ts` — extend: request carries glossary; direct
+  path applies replacement; gateway path does not double-replace.
+
+Docs:
+
+- `README.md` — glossary usage, new env vars, history export.
+- `docs/architecture.md` — terminology-intervention design, A/B result.
+
+## 7. Prompt Templates (verbatim)
+
+Official HY-MT1.5 terminology template (Chinese, for reference):
+
+```text
+参考下面的翻译：
+{source_term} 翻译成 {target_term}
+
+将以下文本翻译为{target_language}，注意只需要输出翻译后的结果，不要额外解释：
+{source_text}
+```
+
+**English adaptation (v1 default, used in BOTH prompt builders):**
+
+```text
+Refer to the following translations:
+{source} -> {target}
+
+Translate the following text into {target_lang}. Only output the translated
+result, without any additional explanation:
+
+{source_text}
+```
+
+- The glossary block is rendered first (stable order, §D2), then the
+  instruction tail. The tail must stay identical to today's prompt when
+  glossary is empty (backward compat).
+- Do not add chat-format wrapping beyond what the current code does
+  (raw prompt for Ollama generate / user message for llama.cpp chat).
+- ja->ko example: `冒険者 -> 모험가`, `魔法使い -> 마법사`,
+  `異世界 -> 이세계`.
+
+## 8. Post-Replacement Algorithm
+
+Purpose: safety net — the model occasionally leaves a source term
+untranslated or renders it inconsistently; replace deterministically.
+
+```text
+1. If glossary empty -> return output unchanged.
+2. Sort entries by len(source) DESCENDING (longest first).
+3. For each entry:
+     pattern source:
+       - if source is pure ASCII (A-Za-z0-9_): regex with word
+         boundaries: \b(escaped)\b, re.IGNORECASE
+       - else (contains Japanese/Korean/CJK): re.escape(source), no
+         word boundaries (Japanese has no spaces), re.IGNORECASE
+         (no-op for kana/kanji, harmless)
+     output = pattern.sub(target, output)
+4. Return output.
+```
+
+Key tests (add to both gateway and extension test suites):
+
+- Longest-first: `魔法使い` must win over a hypothetical shorter overlap.
+- ASCII boundary: "Sword" must not replace inside "Swordfish".
+- Japanese substring: `冒険者` inside `冒険者の剣` → `모험가의 검`.
+- Case: "sword" -> "검" matches "Sword" in output.
+- Idempotence: applying twice equals applying once (source terms are gone
+  after the first pass; target terms never re-matched because we match
+  source, not target).
+
+## 9. Logging Schema (future LoRA dataset)
+
+Gateway JSONL (one object per line, append-only):
+
+```json
+{"ts":"2026-08-10T18:00:00.000Z","source_lang":"ja","target_lang":"ko","source_text":"...","translation":"...","model":"hy-mt:1.5b","attempts":1,"warnings":[],"glossary_count":5}
+```
+
+- Appended on every successful gateway translation; failures skipped.
+- Rotation-lite: when the file exceeds 200 MB, rename to
+  `<path>.1.jsonl` and start fresh. Log failures are swallowed
+  (never break translation).
+- Env toggles: `LST_TRANSLATION_LOG_ENABLED=false` to disable,
+  `LST_TRANSLATION_LOG_PATH=...` to relocate.
+
+Extension storage buffer (covers direct ollama/llamacpp providers):
 
 ```ts
-textNode.nodeValue = translatedText;
+{ ts: string; hostname: string; source_lang: string; target_lang: string;
+  source_text: string; translation: string }
 ```
 
-Store the original content before mutation:
-
-```ts
-type TranslationRecord = {
-  node: Text;
-  originalText: string;
-  translatedText: string;
-  status: "pending" | "translated" | "failed" | "skipped";
-};
-```
-
-Use a `WeakMap<Text, TranslationRecord>` for in-memory page state.
-
-### 7.3 Block Grouping
-
-Do not request one API call per tiny text node.
-
-Group text nodes by nearest semantic block ancestor:
-
-```text
-p, li, blockquote, figcaption, h1, h2, h3, h4, h5, h6, td, th
-```
-
-Rules:
-
-- Keep inline nodes in the same semantic block where possible.
-- Preserve node-to-fragment mapping so the translated result can be restored.
-- For v1, it is acceptable to translate a whole block into the first text node
-only if it does not break inline formatting; otherwise translate each text node
-independently.
-- Prefer correctness over aggressive grouping.
-
-For long blocks:
-
-- Split at paragraph/sentence boundaries.
-- Maximum 1,200 characters per request by default.
-- Never split surrogate pairs or Unicode grapheme clusters.
-- Keep a configurable overlap only if required for context; default is no overlap.
-
----
-
-## 8. CSS Selector Generation
-
-Implement a robust but readable selector generator.
-
-Priority:
-
-1. Stable unique `id`, excluding obviously generated IDs.
-2. Stable semantic classes.
-3. Element hierarchy with `:nth-of-type()` only as fallback.
-4. Validate by running `document.querySelectorAll(selector)`.
-
-Selector acceptance:
-
-- Prefer selectors resolving to exactly one element.
-- If multiple elements match, show a warning and require confirmation.
-- Do not save selectors containing known unstable patterns:
-    - random long hashes
-    - framework-generated attributes
-    - overly deep `nth-child()` chains
-- Allow manual selector editing before saving.
-
-Examples:
-
-- Good: `article .chapter-content`
-- Acceptable fallback: `main > article:nth-of-type(1) .content`
-- Avoid: `div.css-1a2b3c > div:nth-child(4) > span:nth-child(2)`
-
----
-
-## 9. Message Contracts
-
-Define strict discriminated-union message types.
-
-```ts
-type ExtensionMessage =
-  | {
-      type: "START_ELEMENT_PICKER";
-    }
-  | {
-      type: "ELEMENT_SELECTED";
-      selector: string;
-      previewText: string;
-      hostname: string;
-    }
-  | {
-      type: "START_TRANSLATION";
-      requestId: string;
-      selector: string;
-      sourceLang: string;
-      targetLang: string;
-    }
-  | {
-      type: "TRANSLATION_PROGRESS";
-      requestId: string;
-      completed: number;
-      total: number;
-      failed: number;
-    }
-  | {
-      type: "TRANSLATION_COMPLETE";
-      requestId: string;
-      completed: number;
-      failed: number;
-    }
-  | {
-      type: "RESTORE_ORIGINAL";
-    }
-  | {
-      type: "CANCEL_TRANSLATION";
-      requestId: string;
-    };
-```
-
-Use:
-
-- `chrome.runtime.sendMessage()` for one-shot messages.
-- A long-lived port only if real-time progress updates prove unreliable with
-one-shot messaging.
-- `AbortController` for in-flight fetch cancellation.
-
----
-
-## 10. Translation Queue
-
-Implement queueing in the service worker.
-
-Default configuration:
-
-- Max concurrent requests: 2.
-- Maximum retries per block: 1.
-- Per request timeout: 45 seconds.
-- Retry delay: exponential backoff, starting at 500ms.
-- Stop all remaining work when user cancels.
-
-Queue behavior:
-
-1. Content script extracts blocks.
-2. Content script sends blocks to service worker.
-3. Service worker schedules requests with concurrency limit.
-4. Service worker calls gateway `/translate`.
-5. Service worker returns translated text or structured error.
-6. Content script applies translated text only when the response belongs to the
-active request and the text node still exists.
-
-Request ID requirements:
-
-- Generate a UUID for each translation session.
-- Ignore stale results after navigation, cancellation, restore, or new run.
-
----
-
-## 11. FastAPI Gateway
-
-### 11.1 Endpoints
-
-```text
-GET  /health
-POST /translate
-POST /translate/batch       # Optional after single-item endpoint is stable
-GET  /models                # Return configured model presets only
-```
-
-
-### 11.2 `/health`
-
-Response:
-
-```json
-{
-  "status": "ok",
-  "runtime": "ollama",
-  "model": "configured-model-name"
-}
-```
-
-
-### 11.3 `/translate`
-
-Request:
-
-```json
-{
-  "text": "번역할 순수 텍스트",
-  "source_lang": "ko",
-  "target_lang": "en",
-  "preset": "translation-default"
-}
-```
-
-Response:
-
-```json
-{
-  "translation": "Text translation only.",
-  "detected_source_lang": "ko",
-  "model": "configured-model-name",
-  "attempts": 1,
-  "warnings": []
-}
-```
-
-Failure response:
-
-```json
-{
-  "error": {
-    "code": "REPETITIVE_OUTPUT",
-    "message": "Model output contained repeated text."
-  }
-}
-```
-
-
-### 11.4 CORS
-
-Allow only explicitly configured local development origins:
-
-- `chrome-extension://<development-extension-id>`
-- Optionally localhost during gateway testing.
-
-Do not configure unrestricted CORS in production instructions.
-
-### 11.5 Model Client
-
-Create an abstraction:
-
-```py
-class ModelClient(Protocol):
-    async def translate(
-        self,
-        prompt: str,
-        options: ModelOptions
-    ) -> str: ...
-```
-
-Implement:
-
-- `OllamaClient` first.
-- `LlamaCppClient` later.
-
-The browser must not know which runtime is used.
-
----
-
-## 12. Prompt and Generation Policy
-
-Prompt construction belongs only in the gateway.
-
-Default intent:
-
-```text
-Translate from {source_lang} to {target_lang}.
-
-Rules:
-- Return only the translation.
-- Do not explain the translation.
-- Do not repeat the source text.
-- Do not add headings, quotes, notes, or commentary.
-- Preserve line breaks when they carry meaning.
-
-Text:
-{input_text}
-```
-
-Important:
-
-- Replace this generic prompt with the translation model's official recommended
-prompt/chat template if the selected model requires one.
-- Do not include raw HTML.
-- Do not add large system prompts.
-- Do not use chain-of-thought prompts.
-- Do not include few-shot examples in v1.
-
-Initial generation values:
-
-```json
-{
-  "temperature": 0.1,
-  "top_p": 0.9,
-  "top_k": 40,
-  "repeat_penalty": 1.08,
-  "repeat_last_n": 96,
-  "num_ctx": 2048
-}
-```
-
-Output length policy:
-
-- Calculate a conservative maximum output budget from input length.
-- Start at approximately 1.6 times source token count.
-- Apply absolute cap of 1,024 output tokens for v1.
-- For short text, use a small cap such as 128 tokens.
-
-Do not blindly set a huge `num_predict`; excessive output budget allows the model
-to continue generating after translation has completed, often producing repeated
-sentences.
-
----
-
-## 13. Repetition and Quality Validation
-
-Implement server-side output validation before returning text.
-
-Reject or retry when:
-
-1. Output is empty after trimming.
-2. Output is nearly identical to source text when source and target language differ.
-3. The same normalized sentence appears consecutively two or more times.
-4. Any normalized 8-gram appears three or more times.
-5. Output exceeds 3 times the source character count without an explicit reason.
-6. Output includes known prompt leakage:
-    - `Translate`
-    - `Translation:`
-    - `<text>`
-    - `assistant`
-    - model chat boundary markers
-
-Normalization for repetition check:
-
-- Unicode normalize with NFKC.
-- Collapse repeated whitespace.
-- Lowercase for languages where it is appropriate.
-- Remove surrounding punctuation only for comparison, not display.
-
-Retry policy:
-
-1. First request: default settings.
-2. On repeat failure:
-    - reduce max output token cap
-    - use `temperature: 0.15`
-    - use `repeat_penalty: 1.12`
-3. If retry fails:
-    - return structured error
-    - let browser optionally split the source block into smaller units
-4. Never silently apply a known repetitive result.
-
-Implement unit tests for:
-
-- repeated complete sentence
-- repeated phrase
-- legitimate short repeated text
-- source equals target due to names/code
-- Korean and English punctuation edge cases
-
----
-
-## 14. UI Requirements
-
-### 14.1 Popup MVP
-
-Show:
-
-- Current gateway status: connected / unavailable
-- Source language select: auto, ko, en, ja
-- Target language select: ko, en, ja
-- Button: `Select area`
-- Button: `Translate saved area`
-- Button: `Restore original`
-- Button: `Cancel`
-- Progress text
-- Link: `Settings`
-
-Disable translate actions when:
-
-- gateway health check fails
-- no target area exists
-- translation is already running
-
-
-### 14.2 Element Picker
-
-When active:
-
-- Use a non-invasive overlay/highlight.
-- On hover, draw a border around the candidate element.
-- Display tag name, classes, and a short selector preview.
-- Escape cancels picker mode.
-- Click selects the highlighted element.
-- Ignore the extension's own overlay nodes.
-- Do not block page interaction except while picker mode is active.
-
-
-### 14.3 Translation Display
-
-For v1:
-
-- Replace displayed text in place.
-- Add a lightweight translated marker class to nearest safe parent block.
-- Provide global restore button.
-
-Optional v2:
-
-- Toggle original/translated per block.
-- Show original on hover.
-- Add a side panel job history.
-
----
-
-## 15. Error Handling
-
-Handle these cases explicitly:
-
-
-| Case | Expected behavior |
-| :-- | :-- |
-| Gateway unavailable | Show actionable connection error; do not mutate DOM |
-| Model timeout | Mark block failed; allow retry |
-| User cancels | Abort queued and active requests; do not apply late responses |
-| Page navigation | Discard session state |
-| Selector matches no element | Show selector error |
-| Selector matches multiple elements | Ask user to confirm or refine selector |
-| Dynamic page replaces DOM | Skip detached nodes safely; report partial completion |
-| Repetitive output | Retry once, then leave source unchanged |
-| Invalid model response | Leave source unchanged and show error |
-| Source too long | Split into smaller sentence-aware chunks |
-
-Never let one failed text block stop the whole page job.
-
----
-
-## 16. Testing Plan
-
-### 16.1 Extension Unit Tests
-
-Test:
-
-- selector generation
-- selector validation
-- skipped tag filtering
-- text-node collection
-- chunk splitting
-- original-text restoration
-- stale request rejection
-- message schemas
-- queue concurrency and cancellation
-
-Use a DOM test environment such as jsdom where practical.
-
-### 16.2 Gateway Unit Tests
-
-Test:
-
-- request validation
-- prompt generation
-- Ollama client mock
-- output cleanup
-- repetition detection
-- retry policy
-- token/output limit calculation
-
-
-### 16.3 Manual Browser Tests
-
-Test against:
-
-1. Static article page with headings, links, lists, tables, and captions.
-2. SPA page where content changes after navigation.
-3. Long web novel/chapter page.
-4. Page with code blocks and preformatted text.
-5. Page with Korean, English, Japanese mixed text.
-6. Page with a saved selector rule.
-7. Gateway disconnected state.
-8. Cancellation during 20+ queued blocks.
-9. Repeated-output test using mocked gateway response.
-
-Success criteria:
-
-- No raw HTML is sent to the gateway.
-- No page markup breaks after translation.
-- Links and inline formatting remain functional.
-- Restore returns every changed text node to original value.
-- A single failed block does not halt remaining blocks.
-- Repetitive model output never gets silently inserted.
-
----
-
-## 17. Development Milestones
-
-### Milestone 1 — Gateway Skeleton
-
-Deliver:
-
-- FastAPI project.
-- `/health` endpoint.
-- `/translate` endpoint.
-- Ollama client integration.
-- Fixed test input and output.
-- Docker Compose instructions.
-- Basic tests.
-
-Acceptance:
-
-- `curl` to `/translate` returns translation-only text.
-- Gateway rejects invalid requests.
-- Gateway does not expose model internals to the browser.
-
-
-### Milestone 2 — Extension Injection and Picker
-
-Deliver:
-
-- MV3 extension setup with TypeScript build.
-- Popup.
-- `activeTab` script injection.
-- Element picker overlay.
-- CSS selector preview and copy.
-- Basic selector save/load.
-
-Acceptance:
-
-- User can select one element on a page.
-- The selector finds the same element after page refresh when stable.
-
-
-### Milestone 3 — Safe Text Replacement
-
-Deliver:
-
-- TreeWalker text-node collector.
-- Exclusion rules.
-- Original-text WeakMap storage.
-- Translate/restore buttons.
-- Mock translation service initially.
-
-Acceptance:
-
-- Text changes without breaking links, emphasis, lists, or page layout.
-- Restore works exactly.
-
-
-### Milestone 4 — Real Translation Queue
-
-Deliver:
-
-- Service worker API client.
-- Configurable local gateway URL.
-- Queue with concurrency=2.
-- Progress updates.
-- Timeout/cancel behavior.
-
-Acceptance:
-
-- 20 text blocks translate with no more than 2 concurrent API calls.
-- Cancel prevents late updates from applying.
-
-
-### Milestone 5 — Reliability Layer
-
-Deliver:
-
-- Repetition detector.
-- Output-length guard.
-- One retry policy.
-- Sentence-aware fallback split.
-- Per-block error reporting.
-
-Acceptance:
-
-- Mock repeated response is rejected.
-- Valid translation still passes.
-- Failed blocks retain original text.
-
-
-### Milestone 6 — Documentation and Packaging
-
-Deliver:
-
-- README with setup.
-- Load-unpacked Chrome instructions.
-- Gateway Docker setup.
-- Troubleshooting guide for CORS, Ollama, model speed, and selectors.
-- Example domain rules.
-- Build scripts.
-
-Acceptance:
-
-- A new developer can run the gateway and load the extension locally from docs.
-
----
-
-## 18. Implementation Constraints
-
-- Use no cloud service by default.
-- Do not use external analytics or telemetry.
-- Do not transmit browser page text anywhere except configured local gateway.
-- Do not use `eval`, remote code loading, or inline scripts.
-- Follow Chrome MV3 Content Security Policy constraints.
-- Keep extension dependencies minimal.
-- Use structured logging in the gateway, but never log full document text by default.
-- Redact text from error logs unless debug mode is explicitly enabled.
-- Keep model selection configurable on gateway side.
-- Write clear error messages in Korean and English where easy.
-
----
-
-## 19. Nice-to-Have After MVP
-
-- Chrome Side Panel with detailed progress and selector management.
-- Translation memory cache keyed by SHA-256 of source text + language pair + model.
-- IndexedDB cache for persistent page translation results.
-- Glossary support with per-domain terminology.
-- MutationObserver mode for newly loaded content.
-- Subtitle-style dual-language display rather than replacement.
-- Optional HTML attribute translation.
-- Batch endpoint to reduce HTTP overhead.
-- Translation quality router: use fast 1.5B model first, fallback to larger model only
-when output validation fails.
-- Per-site custom pre/post-processing rules.
-- Export/import selector rules and glossary as JSON.
-
+- Capped at 2000 entries, oldest dropped; export/clear via options UI
+  (Phase 4). Note in README: history is stored locally in the browser.
+
+## 10. Verification Checklist
+
+1. `cd gateway && python3 -m venv .venv` (if missing) then
+   `pip install -r requirements.txt -r requirements-dev.txt`, then
+   `python -m pytest` — all green (old + new tests).
+2. `cd extension && npm install` (if missing), then
+   `npm run typecheck && npm test && npm run build` — all green.
+3. Gateway smoke test (llama.cpp or Ollama serving `hy-mt:1.5b`):
+   ```bash
+   curl -s localhost:8000/translate -H 'Content-Type: application/json' -d '{
+     "source_lang":"ja","target_lang":"ko",
+     "text":"冒険者と魔法使いが異世界で旅をした。",
+     "glossary":[{"source":"冒険者","target":"모험가"},{"source":"魔法使い","target":"마법사"},{"source":"異世界","target":"이세계"}]
+   }'
+   ```
+   Expect 모험가/마법사/이세계 in the result.
+4. Extension E2E with **provider = llamacpp (Path B)**: load unpacked,
+   save a rule for a Japanese site, add glossary entries in options,
+   translate a selected area, verify terms, then export history JSONL
+   from options — file must contain the pairs.
+5. Extension E2E with provider = gateway (Path A): same steps, verify
+   terms + `data/translation_log.jsonl` entries.
+6. A/B (record result in docs/architecture.md): same 10 ja->ko sentences
+   with (a) official Chinese template, (b) English adaptation, glossary of
+   10 mixed terms; pick the better; if (a) wins, switch §7 default and
+   update tests accordingly.
+7. KV-cache sanity (optional): two identical glossary requests back to
+   back; the second should be noticably faster (Ollama) / reuse slots
+   (llama.cpp).
+
+## 11. Backward Compatibility
+
+- Stored settings without `glossary` sanitize to `[]`; prompt output with
+  empty glossary is byte-identical to current behavior (existing prompt
+  tests must pass unmodified).
+- `glossary` is optional in the API; old extension versions hitting a new
+  gateway (and vice versa) keep working.
+- `num_ctx` 2048 → 4096 is a runtime option bump; fine on 8 GB VRAM with
+  the 1.8B model.
+
+## 12. Future Work (explicitly deferred)
+
+- **LoRA / fine-tune** only when: >= ~1000 logged pairs per site exist AND
+  prompt+post-replace has been shown insufficient (style/format beyond
+  terms). 8 GB VRAM is sufficient for LoRA training on a 1.8B model
+  (QLoRA). Do not attempt earlier.
+- Direction-aware glossary entries (`ja->ko` vs `ko->ja` per rule).
+- Global glossary + per-site overrides.
+- Term suggestion mining from logged pairs (frequency/consistency stats).
+- History size management beyond the 2000-entry cap (e.g. IndexedDB).
+
+## 13. Environment Notes for the Executing Agent
+
+- Repo root: `/home/ahn/dev/QuickLocalMT` (branch `main`).
+- A worktree `add-glossary` exists at `~/orca/workspaces/QuickLocalMT/add-glossary`
+  (currently at the same commit as main). Work on it if you use orca
+  worktrees; otherwise working on `main` is fine — do not create a second
+  conflicting branch without need.
+- Extension scripts: `npm test` (vitest), `npm run typecheck`, `npm run build`.
+- Gateway: FastAPI app `gateway/app/main.py`, tests with pytest.
+- User's primary direction is ja -> ko; default examples and smoke tests
+  should use ja/ko.

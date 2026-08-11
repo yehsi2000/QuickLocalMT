@@ -13,13 +13,27 @@
       }
       main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
       h1 { font-size: 20px; margin: 0 0 4px; }
-      h2 { font-size: 15px; margin: 28px 0 8px; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px; }
+      h2 { font-size: 15px; margin: 0 0 10px; }
       p.sub { color: #64748b; font-size: 13px; margin: 0 0 12px; }
       section { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px; }
+      .tabs { display: flex; gap: 6px; margin: 16px 0 12px; border-bottom: 1px solid #e2e8f0; }
+      .tab {
+        font: 13px/1.4 system-ui, sans-serif;
+        padding: 8px 14px;
+        border: none;
+        border-bottom: 2px solid transparent;
+        border-radius: 6px 6px 0 0;
+        background: transparent;
+        color: #475569;
+        cursor: pointer;
+      }
+      .tab.active { border-bottom-color: #2563eb; color: #2563eb; background: #eff6ff; font-weight: 600; }
+      .tab-panel { display: none; }
+      .tab-panel.active { display: block; }
       .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
       .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
       .field label { font-size: 12px; color: #475569; }
-      input, select {
+      input, select, textarea {
         font: 13px/1.4 system-ui, sans-serif;
         padding: 7px 9px;
         border: 1px solid #cbd5e1;
@@ -27,6 +41,7 @@
         background: #fff;
         color: #0f172a;
       }
+      textarea { resize: vertical; line-height: 1.5; }
       input[type="checkbox"] { width: auto; }
       .check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
       button {
@@ -52,8 +67,8 @@
       .toggle { font-size: 12px; padding: 4px 8px; }
       .toggle.off { background: #f1f5f9; color: #64748b; }
       .empty { color: #94a3b8; font-size: 13px; padding: 12px 0; }
-      #editor { display: none; border: 1px solid #bfdbfe; background: #eff6ff; }
-      #editor.open { display: block; }
+      #editor, #glossary-editor { display: none; border: 1px solid #bfdbfe; background: #eff6ff; margin-top: 12px; }
+      #editor.open, #glossary-editor.open { display: block; }
       .row { display: flex; gap: 8px; align-items: flex-end; }
       .result { margin-top: 8px; font-size: 12px; color: #334155; background: #f1f5f9; padding: 8px 10px; border-radius: 6px; white-space: pre-wrap; word-break: break-all; }
       .msg { margin-top: 10px; font-size: 13px; padding: 8px 10px; border-radius: 6px; }
@@ -61,15 +76,24 @@
       .msg.err { background: #fee2e2; color: #991b1b; }
       .provider-fields { display: none; }
       .provider-fields.active { display: block; }
+      .glossary-count { font-size: 12px; color: #64748b; }
+      .glossary-errors { font-size: 12px; color: #b91c1c; white-space: pre-wrap; }
     </style>
   </head>
   <body>
     <main>
       <h1>Local Selector Translator</h1>
-      <p class="sub">Settings for the translation gateway and saved selector rules.</p>
+      <p class="sub">Settings for the translation gateway, saved selector rules, and per-site vocabulary.</p>
 
-      <h2>Translation provider</h2>
-      <section>
+      <nav class="tabs">
+        <button class="tab active" data-tab="general">General</button>
+        <button class="tab" data-tab="rules">Selector rules</button>
+        <button class="tab" data-tab="glossary">Vocabulary</button>
+        <button class="tab" data-tab="history">History</button>
+      </nav>
+
+      <section id="tab-general" class="tab-panel active">
+        <h2>Translation provider</h2>
         <div class="field">
           <label for="provider">Provider</label>
           <select id="provider">
@@ -141,59 +165,96 @@
         </div>
       </section>
 
-      <h2>Saved selector rules</h2>
-      <section>
+      <section id="tab-rules" class="tab-panel">
+        <h2>Saved selector rules</h2>
         <div id="rules-list"></div>
         <button id="add-rule" class="primary">Add rule</button>
+
+        <section id="editor">
+          <h2 id="editor-title">New rule</h2>
+          <div class="field">
+            <label for="rule-host">Hostname (e.g. news.example.com)</label>
+            <input id="rule-host" type="text" spellcheck="false" />
+          </div>
+          <div class="field">
+            <label for="rule-path">Path pattern (optional, e.g. /article/*)</label>
+            <input id="rule-path" type="text" spellcheck="false" />
+          </div>
+          <div class="field">
+            <label for="rule-selector">CSS selector</label>
+            <input id="rule-selector" type="text" spellcheck="false" />
+          </div>
+          <div class="field">
+            <label for="rule-excluded">Excluded selectors (comma separated)</label>
+            <input id="rule-excluded" type="text" spellcheck="false" />
+          </div>
+          <div class="grid">
+            <div class="field">
+              <label for="rule-source">Source language</label>
+              <select id="rule-source">
+                <option value="">Use default</option>
+                <option value="auto">Auto</option>
+                <option value="ko">Korean</option>
+                <option value="en">English</option>
+                <option value="ja">Japanese</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="rule-target">Target language</label>
+              <select id="rule-target">
+                <option value="">Use default</option>
+                <option value="ko">Korean</option>
+                <option value="en">English</option>
+                <option value="ja">Japanese</option>
+              </select>
+            </div>
+          </div>
+          <div class="row">
+            <button id="rule-save" class="primary">Save rule</button>
+            <button id="rule-test">Test on active page</button>
+            <button id="rule-delete" class="danger">Delete</button>
+            <button id="rule-cancel">Cancel</button>
+          </div>
+          <div id="rule-msg" class="msg"></div>
+          <div id="test-result" class="result"></div>
+        </section>
       </section>
 
-      <section id="editor">
-        <h2 id="editor-title" style="border: none; margin: 0 0 10px;">New rule</h2>
-        <div class="field">
-          <label for="rule-host">Hostname (e.g. news.example.com)</label>
-          <input id="rule-host" type="text" spellcheck="false" />
-        </div>
-        <div class="field">
-          <label for="rule-path">Path pattern (optional, e.g. /article/*)</label>
-          <input id="rule-path" type="text" spellcheck="false" />
-        </div>
-        <div class="field">
-          <label for="rule-selector">CSS selector</label>
-          <input id="rule-selector" type="text" spellcheck="false" />
-        </div>
-        <div class="field">
-          <label for="rule-excluded">Excluded selectors (comma separated)</label>
-          <input id="rule-excluded" type="text" spellcheck="false" />
-        </div>
-        <div class="grid">
+      <section id="tab-glossary" class="tab-panel">
+        <h2>Vocabulary (per-site glossary)</h2>
+        <p class="sub">One glossary per site. Mappings are applied whenever that site is translated, regardless of direction.</p>
+        <div id="glossary-list"></div>
+        <button id="add-glossary" class="primary">Add vocabulary</button>
+
+        <section id="glossary-editor">
+          <h2 id="glossary-editor-title">New vocabulary</h2>
           <div class="field">
-            <label for="rule-source">Source language</label>
-            <select id="rule-source">
-              <option value="">Use default</option>
-              <option value="auto">Auto</option>
-              <option value="ko">Korean</option>
-              <option value="en">English</option>
-              <option value="ja">Japanese</option>
-            </select>
+            <label for="glossary-host">Hostname (e.g. news.example.com)</label>
+            <input id="glossary-host" type="text" spellcheck="false" />
           </div>
           <div class="field">
-            <label for="rule-target">Target language</label>
-            <select id="rule-target">
-              <option value="">Use default</option>
-              <option value="ko">Korean</option>
-              <option value="en">English</option>
-              <option value="ja">Japanese</option>
-            </select>
+            <label for="glossary-text">Vocabulary — one mapping per line (<code>source -&gt; target</code>; lines starting with <code>#</code> are comments).</label>
+            <textarea id="glossary-text" rows="6" spellcheck="false" placeholder="冒険者 -&gt; 모험가&#10;魔法使い -&gt; 마법사&#10;# comment line"></textarea>
+            <span id="glossary-count" class="glossary-count"></span>
+            <div id="glossary-errors" class="glossary-errors"></div>
           </div>
+          <div class="row">
+            <button id="glossary-save" class="primary">Save vocabulary</button>
+            <button id="glossary-delete" class="danger">Delete</button>
+            <button id="glossary-cancel">Cancel</button>
+          </div>
+          <div id="glossary-msg" class="msg"></div>
+        </section>
+      </section>
+
+      <section id="tab-history" class="tab-panel">
+        <h2>Translation history</h2>
+        <p class="sub">Successful translations are stored locally in your browser (most recent 2000). This is the future fine-tuning dataset for a per-site model.</p>
+        <div class="row" style="margin-top: 12px;">
+          <button id="export-history">Export history (JSONL)</button>
+          <button id="clear-history" class="danger">Clear history</button>
+          <span id="history-msg"></span>
         </div>
-        <div class="row">
-          <button id="rule-save" class="primary">Save rule</button>
-          <button id="rule-test">Test on active page</button>
-          <button id="rule-delete" class="danger">Delete</button>
-          <button id="rule-cancel">Cancel</button>
-        </div>
-        <div id="rule-msg" class="msg"></div>
-        <div id="test-result" class="result"></div>
       </section>
     </main>
     <script type="module" src="./options.ts"></script>

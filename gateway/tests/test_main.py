@@ -39,7 +39,13 @@ def test_translate_rejects_bad_language():
 
 
 class FakeService:
-    async def translate(self, text, source_lang, target_lang, preset="translation-default"):
+    def __init__(self):
+        self.last_glossary = None
+
+    async def translate(
+        self, text, source_lang, target_lang, preset="translation-default", glossary=None
+    ):
+        self.last_glossary = glossary
         return {
             "translation": "Hello.",
             "detected_source_lang": "ko",
@@ -51,7 +57,8 @@ class FakeService:
 
 def test_translate_success(monkeypatch):
     client = TestClient(app)
-    monkeypatch.setattr(app.state, "service", FakeService())
+    fake = FakeService()
+    monkeypatch.setattr(app.state, "service", fake)
     response = client.post(
         "/translate", json={"text": "안녕하세요", "source_lang": "ko", "target_lang": "en"}
     )
@@ -59,3 +66,34 @@ def test_translate_success(monkeypatch):
     body = response.json()
     assert body["translation"] == "Hello."
     assert body["attempts"] == 1
+
+
+def test_translate_passes_glossary_to_service(monkeypatch):
+    client = TestClient(app)
+    fake = FakeService()
+    monkeypatch.setattr(app.state, "service", fake)
+    response = client.post(
+        "/translate",
+        json={
+            "text": "冒険者と魔法使い",
+            "source_lang": "ja",
+            "target_lang": "ko",
+            "glossary": [
+                {"source": "冒険者", "target": "모험가"},
+                {"source": "魔法使い", "target": "마법사"},
+            ],
+        },
+    )
+    assert response.status_code == 200
+    assert fake.last_glossary[0].source == "冒険者"
+    assert fake.last_glossary[1].target == "마법사"
+
+
+def test_translate_rejects_glossary_over_limit():
+    client = TestClient(app)
+    glossary = [{"source": f"term{i}", "target": "T"} for i in range(51)]
+    response = client.post(
+        "/translate",
+        json={"text": "hello", "source_lang": "ko", "target_lang": "en", "glossary": glossary},
+    )
+    assert response.status_code == 422

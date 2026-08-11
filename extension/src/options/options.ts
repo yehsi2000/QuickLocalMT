@@ -1,12 +1,15 @@
 import {
   addDomainRule,
   deleteDomainRule,
+  deleteSiteGlossary,
   loadSettings,
   saveSettings,
   updateDomainRule,
+  upsertSiteGlossary,
 } from '../background/settings';
-import { isValidGatewayUrl, isValidSelector } from '../shared/validation';
-import type { DomainRule, ExtensionSettings, ProviderKind } from '../shared/types';
+import { clearHistory, exportHistoryJsonl, getHistory } from '../background/history';
+import { isValidGatewayUrl, isValidSelector, normalizeGlossary } from '../shared/validation';
+import type { DomainRule, ExtensionSettings, GlossaryEntry, ProviderKind } from '../shared/types';
 
 function byId<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -45,6 +48,23 @@ const ruleDeleteBtn = byId<HTMLButtonElement>('rule-delete');
 const ruleCancelBtn = byId<HTMLButtonElement>('rule-cancel');
 const ruleMsg = byId<HTMLDivElement>('rule-msg');
 const testResult = byId<HTMLDivElement>('test-result');
+const glossaryList = byId<HTMLDivElement>('glossary-list');
+const addGlossaryBtn = byId<HTMLButtonElement>('add-glossary');
+const glossaryEditor = byId<HTMLElement>('glossary-editor');
+const glossaryEditorTitle = byId<HTMLElement>('glossary-editor-title');
+const glossaryHost = byId<HTMLInputElement>('glossary-host');
+const glossaryText = byId<HTMLTextAreaElement>('glossary-text');
+const glossaryCount = byId<HTMLSpanElement>('glossary-count');
+const glossaryErrors = byId<HTMLDivElement>('glossary-errors');
+const glossarySaveBtn = byId<HTMLButtonElement>('glossary-save');
+const glossaryDeleteBtn = byId<HTMLButtonElement>('glossary-delete');
+const glossaryCancelBtn = byId<HTMLButtonElement>('glossary-cancel');
+const glossaryMsg = byId<HTMLDivElement>('glossary-msg');
+const exportHistoryBtn = byId<HTMLButtonElement>('export-history');
+const clearHistoryBtn = byId<HTMLButtonElement>('clear-history');
+const historyMsg = byId<HTMLSpanElement>('history-msg');
+const tabButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('.tab'));
+const tabPanels = Array.from(document.querySelectorAll<HTMLElement>('.tab-panel'));
 
 let settings: ExtensionSettings = {
   provider: 'gateway',
@@ -59,8 +79,23 @@ let settings: ExtensionSettings = {
   textChunkMaxChars: 1200,
   autoUseSavedRule: false,
   domainRules: [],
+  siteGlossaries: [],
 };
 let editingRuleId: string | null = null;
+let editingGlossaryHostname: string | null = null;
+
+function switchTab(name: string): void {
+  for (const button of tabButtons) {
+    button.classList.toggle('active', button.dataset.tab === name);
+  }
+  for (const panel of tabPanels) {
+    panel.classList.toggle('active', panel.id === `tab-${name}`);
+  }
+}
+
+for (const button of tabButtons) {
+  button.addEventListener('click', () => switchTab(button.dataset.tab ?? 'general'));
+}
 
 function flashMessage(element: HTMLElement, message: string, kind: 'ok' | 'err'): void {
   element.textContent = message;
@@ -71,6 +106,70 @@ function flashMessage(element: HTMLElement, message: string, kind: 'ok' | 'err')
       element.className = 'msg';
     }
   }, 3000);
+}
+
+const MAX_GLOSSARY_TERM_LENGTH = 200;
+
+function findSeparator(line: string): number {
+  const asciiIdx = line.indexOf('->');
+  const unicodeIdx = line.indexOf('→');
+  if (asciiIdx < 0) {
+    return unicodeIdx;
+  }
+  if (unicodeIdx < 0) {
+    return asciiIdx;
+  }
+  return Math.min(asciiIdx, unicodeIdx);
+}
+
+export function parseGlossaryText(text: string): { entries: GlossaryEntry[]; errors: string[] } {
+  const entries: GlossaryEntry[] = [];
+  const errors: string[] = [];
+  const lines = text.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? '';
+    const trimmed = line.trim();
+    if (trimmed.length === 0 || trimmed.startsWith('#')) {
+      continue;
+    }
+    const sepIndex = findSeparator(line);
+    if (sepIndex < 0) {
+      errors.push(`Line ${index + 1}: expected "source -> target"`);
+      continue;
+    }
+    const source = line.slice(0, sepIndex).trim();
+    const target = line
+      .slice(sepIndex + (line.startsWith('->', sepIndex) ? 2 : 1))
+      .trim();
+    if (source.length === 0 || target.length === 0) {
+      errors.push(`Line ${index + 1}: source and target are both required`);
+      continue;
+    }
+    if (source.length > MAX_GLOSSARY_TERM_LENGTH || target.length > MAX_GLOSSARY_TERM_LENGTH) {
+      errors.push(`Line ${index + 1}: terms must be at most ${MAX_GLOSSARY_TERM_LENGTH} characters`);
+      continue;
+    }
+    entries.push({ source, target });
+  }
+  return { entries, errors };
+}
+
+function updateGlossaryPreview(): void {
+  const parsed = parseGlossaryText(glossaryText.value);
+  const normalized = normalizeGlossary(parsed.entries);
+  const count = normalized.length;
+  glossaryCount.textContent = `${count} term${count === 1 ? '' : 's'}`;
+  glossaryErrors.textContent = parsed.errors.slice(0, 8).join('\n');
+}
+
+function downloadBlob(filename: string, content: string, type: string): void {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 function renderRules(): void {
@@ -146,6 +245,66 @@ function closeEditor(): void {
   editingRuleId = null;
 }
 
+function renderGlossaries(): void {
+  glossaryList.textContent = '';
+  if (settings.siteGlossaries.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'No vocabulary yet. Add one per site and it is applied whenever that site is translated.';
+    glossaryList.appendChild(empty);
+    return;
+  }
+  for (const site of settings.siteGlossaries) {
+    const row = document.createElement('div');
+    row.className = 'rule';
+    const info = document.createElement('div');
+    info.className = 'rule-info';
+    const host = document.createElement('div');
+    host.className = 'host';
+    host.textContent = site.hostname;
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = `${site.glossary.length} term${site.glossary.length === 1 ? '' : 's'}`;
+    info.append(host, meta);
+    const actions = document.createElement('div');
+    actions.className = 'rule-actions';
+    const editBtn = document.createElement('button');
+    editBtn.textContent = 'Edit';
+    editBtn.addEventListener('click', () => openGlossaryEditor(site.hostname));
+    const deleteBtn = document.createElement('button');
+    deleteBtn.textContent = 'Delete';
+    deleteBtn.className = 'danger';
+    deleteBtn.addEventListener('click', () => {
+      if (window.confirm(`Delete vocabulary for ${site.hostname}?`)) {
+        void deleteSiteGlossary(site.hostname).then(loadAndRender);
+      }
+    });
+    actions.append(editBtn, deleteBtn);
+    row.append(info, actions);
+    glossaryList.appendChild(row);
+  }
+}
+
+function openGlossaryEditor(hostname: string | null): void {
+  editingGlossaryHostname = hostname;
+  const site = hostname
+    ? settings.siteGlossaries.find((entry) => entry.hostname === hostname)
+    : undefined;
+  glossaryEditor.classList.add('open');
+  glossaryEditorTitle.textContent = hostname ? `Edit vocabulary — ${hostname}` : 'New vocabulary';
+  glossaryHost.value = hostname ?? '';
+  glossaryText.value = (site?.glossary ?? []).map((entry) => `${entry.source} -> ${entry.target}`).join('\n');
+  updateGlossaryPreview();
+  glossaryDeleteBtn.style.display = hostname ? 'inline-block' : 'none';
+  glossaryMsg.textContent = '';
+  glossaryMsg.className = 'msg';
+}
+
+function closeGlossaryEditor(): void {
+  glossaryEditor.classList.remove('open');
+  editingGlossaryHostname = null;
+}
+
 async function runTest(selector: string): Promise<void> {
   testResult.style.display = 'block';
   testResult.textContent = 'Testing…';
@@ -215,6 +374,7 @@ async function loadAndRender(): Promise<void> {
   settings = await loadSettings();
   fillGeneralForm();
   renderRules();
+  renderGlossaries();
 }
 
 saveGeneralBtn.addEventListener('click', async () => {
@@ -302,5 +462,54 @@ ruleDeleteBtn.addEventListener('click', async () => {
 });
 
 ruleCancelBtn.addEventListener('click', closeEditor);
+
+addGlossaryBtn.addEventListener('click', () => openGlossaryEditor(null));
+
+glossarySaveBtn.addEventListener('click', async () => {
+  const hostname = glossaryHost.value.trim().toLowerCase();
+  if (!hostname) {
+    flashMessage(glossaryMsg, 'Hostname is required.', 'err');
+    return;
+  }
+  const parsed = parseGlossaryText(glossaryText.value);
+  if (parsed.errors.length > 0) {
+    flashMessage(glossaryMsg, 'Fix vocabulary errors before saving.', 'err');
+    return;
+  }
+  await upsertSiteGlossary(hostname, normalizeGlossary(parsed.entries));
+  closeGlossaryEditor();
+  await loadAndRender();
+});
+
+glossaryDeleteBtn.addEventListener('click', async () => {
+  if (!editingGlossaryHostname) {
+    return;
+  }
+  await deleteSiteGlossary(editingGlossaryHostname);
+  closeGlossaryEditor();
+  await loadAndRender();
+});
+
+glossaryCancelBtn.addEventListener('click', closeGlossaryEditor);
+
+glossaryText.addEventListener('input', updateGlossaryPreview);
+
+exportHistoryBtn.addEventListener('click', async () => {
+  const entries = await getHistory();
+  if (entries.length === 0) {
+    flashMessage(historyMsg, 'No history to export.', 'err');
+    return;
+  }
+  downloadBlob('translation-history.jsonl', exportHistoryJsonl(entries), 'application/x-ndjson');
+  flashMessage(historyMsg, `Exported ${entries.length} entries.`, 'ok');
+});
+
+clearHistoryBtn.addEventListener('click', async () => {
+  if (!window.confirm('Clear all translation history? This cannot be undone.')) {
+    return;
+  }
+  await clearHistory();
+  flashMessage(historyMsg, 'History cleared.', 'ok');
+});
 
 void loadAndRender();
