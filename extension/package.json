@@ -1,7 +1,7 @@
 {
   "name": "local-selector-translator-extension",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Chrome MV3 extension that translates selected page regions via a local LLM gateway.",
   "scripts": {
@@ -17,5 +17,8 @@
     "typescript": "^5.5.4",
     "vite": "^5.4.8",
     "vitest": "^2.1.1"
+  },
+  "allowScripts": {
+    "esbuild@0.21.5": true
   }
 }

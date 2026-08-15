@@ -7,12 +7,29 @@ TargetLangCode = Literal["ko", "en", "ja"]
 
 ALLOWED_LANGS = {"auto", "ko", "en", "ja"}
 
+MAX_GLOSSARY_ENTRIES = 50
+MAX_GLOSSARY_TERM_LENGTH = 200
+
+
+class GlossaryEntry(BaseModel):
+    source: str = Field(..., min_length=1, max_length=MAX_GLOSSARY_TERM_LENGTH)
+    target: str = Field(..., min_length=1, max_length=MAX_GLOSSARY_TERM_LENGTH)
+
+    @field_validator("source", "target")
+    @classmethod
+    def term_must_not_be_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("term must not be blank")
+        return value
+
 
 class TranslateRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=8000)
     source_lang: str = "auto"
     target_lang: str = "en"
     preset: str = "translation-default"
+    glossary: list[GlossaryEntry] = []
 
     @field_validator("text")
     @classmethod
@@ -33,6 +50,13 @@ class TranslateRequest(BaseModel):
     def target_must_not_be_auto(cls, value: str) -> str:
         if value == "auto":
             raise ValueError("target_lang cannot be 'auto'")
+        return value
+
+    @field_validator("glossary")
+    @classmethod
+    def glossary_must_not_exceed_limit(cls, value: list[GlossaryEntry]) -> list[GlossaryEntry]:
+        if len(value) > MAX_GLOSSARY_ENTRIES:
+            raise ValueError(f"glossary must have at most {MAX_GLOSSARY_ENTRIES} entries")
         return value
 
 

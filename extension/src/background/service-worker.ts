@@ -1,8 +1,10 @@
 import { getProviderHealth, translateChunk } from './api-client';
-import { TranslationQueue } from './translation-queue';
-import { addDomainRule, findRulesForUrl, loadSettings } from './settings';
+import { addHistoryEntry } from './history';
+import { TranslationQueue, type QueueResult, type QueueSummary } from './translation-queue';
+import { addDomainRule, findRulesForUrl, hostnameFromUrl, loadSettings, rulesForTranslation } from './settings';
 import { isExtensionMessage, type ExtensionMessage } from '../shared/messages';
-import type { QueueResult, QueueSummary } from './translation-queue';
+import type { GlossaryEntry } from '../shared/types';
+import { normalizeGlossary } from '../shared/validation';
 
 type SessionState = {
   status: 'idle' | 'running';
@@ -65,6 +67,8 @@ async function ensureContentScript(tabId: number): Promise<void> {
 function queueForTab(
   tabId: number,
   settings: Awaited<ReturnType<typeof loadSettings>>,
+  glossary: GlossaryEntry[],
+  hostname: string,
 ): TranslationQueue {
   let queue = queues.get(tabId);
   if (!queue) {
@@ -78,6 +82,7 @@ function queueForTab(
             source_lang: sourceLang,
             target_lang: targetLang,
             preset: 'translation-default',
+            ...(glossary.length > 0 ? { glossary } : {}),
           },
           signal,
         ),
@@ -91,6 +96,16 @@ function queueForTab(
             : { error: result.error }),
         };
         void chrome.tabs.sendMessage(tabId, message).catch(() => undefined);
+        if (result.ok && hostname.length > 0) {
+          void addHistoryEntry({
+            ts: new Date().toISOString(),
+            hostname,
+            source_lang: result.sourceLang,
+            target_lang: result.targetLang,
+            source_text: result.sourceText,
+            translation: result.translation,
+          });
+        }
       },
       onComplete: (summary: QueueSummary) => {
         const session = sessionForTab(tabId);
@@ -245,7 +260,18 @@ async function handleMessage(
       }
       const tabId = sender.tab.id;
       const settings = await loadSettings();
-      const queue = queueForTab(tabId, settings);
+      const tabUrl = sender.tab.url ?? '';
+      const rules = findRulesForUrl(settings.domainRules, tabUrl);
+      const directionRules = rulesForTranslation(
+        rules,
+        message.sourceLang,
+        message.targetLang,
+        settings.defaultSourceLang,
+        settings.defaultTargetLang,
+      );
+      const mergedGlossary = normalizeGlossary(directionRules.flatMap((rule) => rule.glossary ?? []));
+      const hostname = hostnameFromUrl(tabUrl);
+      const queue = queueForTab(tabId, settings, mergedGlossary, hostname);
       queue.runSession(
         message.blocks.map((block) => ({
           requestId: message.requestId,

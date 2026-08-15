@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     cors_origins: str = ""
     max_input_chars: int = 8000
     max_output_tokens: int = 1024
+    translation_log_enabled: bool = True
+    translation_log_path: str = "data/translation_log.jsonl"
     log_level: str = "INFO"
     debug_log_text: bool = False
 

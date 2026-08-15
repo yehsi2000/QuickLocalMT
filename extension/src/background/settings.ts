@@ -8,6 +8,7 @@ import {
   isValidTargetLang,
   normalizeBaseUrl,
   normalizeGatewayUrl,
+  normalizeGlossary,
   normalizeLang,
   normalizeSelector,
 } from '../shared/validation';
@@ -56,6 +57,7 @@ function sanitizeRule(value: unknown): DomainRule | null {
     excludedSelectors,
     sourceLang: isValidLangCode(value.sourceLang) ? value.sourceLang : undefined,
     targetLang: isValidTargetLang(value.targetLang) ? value.targetLang : undefined,
+    glossary: normalizeGlossary(value.glossary),
     enabled: typeof value.enabled === 'boolean' ? value.enabled : true,
     createdAt: typeof value.createdAt === 'string' ? value.createdAt : new Date().toISOString(),
     updatedAt: typeof value.updatedAt === 'string' ? value.updatedAt : new Date().toISOString(),
@@ -199,6 +201,26 @@ export function findRulesForUrl(rules: DomainRule[], url: string): DomainRule[] 
     matched.push(rule);
   }
   return matched;
+}
+
+export function rulesForTranslation(
+  rules: DomainRule[],
+  sourceLang: string,
+  targetLang: string,
+  defaultSourceLang: LangCode,
+  defaultTargetLang: Exclude<LangCode, 'auto'>,
+): DomainRule[] {
+  return rules.filter((rule) => {
+    if (!rule.enabled) {
+      return false;
+    }
+    const ruleSource = rule.sourceLang ?? defaultSourceLang;
+    const ruleTarget = rule.targetLang ?? defaultTargetLang;
+    const sourceMatches =
+      ruleSource === 'auto' || sourceLang === 'auto' || ruleSource === sourceLang;
+    const targetMatches = ruleTarget === targetLang;
+    return sourceMatches && targetMatches;
+  });
 }
 
 export function langForRule(rule: DomainRule | null, settings: ExtensionSettings): {

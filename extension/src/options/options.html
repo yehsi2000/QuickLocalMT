@@ -19,7 +19,7 @@
       .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
       .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
       .field label { font-size: 12px; color: #475569; }
-      input, select {
+      input, select, textarea {
         font: 13px/1.4 system-ui, sans-serif;
         padding: 7px 9px;
         border: 1px solid #cbd5e1;
@@ -27,6 +27,7 @@
         background: #fff;
         color: #0f172a;
       }
+      textarea { resize: vertical; line-height: 1.5; }
       input[type="checkbox"] { width: auto; }
       .check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
       button {
@@ -61,6 +62,8 @@
       .msg.err { background: #fee2e2; color: #991b1b; }
       .provider-fields { display: none; }
       .provider-fields.active { display: block; }
+      .glossary-count { font-size: 12px; color: #64748b; }
+      .glossary-errors { font-size: 12px; color: #b91c1c; white-space: pre-wrap; }
     </style>
   </head>
   <body>
@@ -186,6 +189,12 @@
             </select>
           </div>
         </div>
+        <div class="field">
+          <label for="rule-glossary">Glossary — one mapping per line (<code>source -&gt; target</code>; lines starting with <code>#</code> are comments). Mappings apply in this rule's translation direction.</label>
+          <textarea id="rule-glossary" rows="6" spellcheck="false" placeholder="冒険者 -&gt; 모험가&#10;魔法使い -&gt; 마법사&#10;# comment line"></textarea>
+          <span id="glossary-count" class="glossary-count"></span>
+          <div id="glossary-errors" class="glossary-errors"></div>
+        </div>
         <div class="row">
           <button id="rule-save" class="primary">Save rule</button>
           <button id="rule-test">Test on active page</button>
@@ -194,6 +203,16 @@
         </div>
         <div id="rule-msg" class="msg"></div>
         <div id="test-result" class="result"></div>
+      </section>
+
+      <h2>Translation history</h2>
+      <section>
+        <p class="sub">Successful translations are stored locally in your browser (most recent 2000). This is the future fine-tuning dataset for a per-site model.</p>
+        <div class="row" style="margin-top: 12px;">
+          <button id="export-history">Export history (JSONL)</button>
+          <button id="clear-history" class="danger">Clear history</button>
+          <span id="history-msg"></span>
+        </div>
       </section>
     </main>
     <script type="module" src="./options.ts"></script>

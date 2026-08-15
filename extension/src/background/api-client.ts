@@ -6,6 +6,7 @@ import type {
   GatewayTranslateRequest,
   GatewayTranslateResponse,
 } from '../shared/types';
+import { applyGlossaryReplacement } from '../shared/glossary';
 import {
   buildTranslationPrompt,
   computeOutputTokenBudget,
@@ -213,7 +214,8 @@ async function translateWithValidation(
   request: GatewayTranslateRequest,
   generate: (prompt: string, options: Record<string, number>) => Promise<string>,
 ): Promise<string> {
-  const prompt = buildTranslationPrompt(request.text, request.source_lang, request.target_lang);
+  const glossary = request.glossary ?? [];
+  const prompt = buildTranslationPrompt(request.text, request.source_lang, request.target_lang, glossary);
   const budget = computeOutputTokenBudget(request.text);
   const attemptSets = [
     { ...DEFAULT_GENERATION_OPTIONS, num_predict: budget },
@@ -228,7 +230,7 @@ async function translateWithValidation(
     const cleaned = cleanChunkOutput(raw);
     const reasons = validateChunk(request.text, request.source_lang, request.target_lang, cleaned);
     if (reasons.length === 0) {
-      return cleaned;
+      return applyGlossaryReplacement(cleaned, glossary);
     }
     if (index === attemptSets.length - 1) {
       throw new GatewayApiError(

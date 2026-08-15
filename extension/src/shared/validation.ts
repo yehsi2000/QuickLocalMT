@@ -1,7 +1,9 @@
-import type { LangCode } from './types';
+import type { GlossaryEntry, LangCode } from './types';
 
 export const KNOWN_LANGS: LangCode[] = ['auto', 'ko', 'en', 'ja'];
 export const TARGET_LANGS: Exclude<LangCode, 'auto'>[] = ['ko', 'en', 'ja'];
+export const MAX_GLOSSARY_ENTRIES = 50;
+export const MAX_GLOSSARY_TERM_LENGTH = 200;
 
 export function isValidLangCode(value: unknown): value is LangCode {
   return typeof value === 'string' && (KNOWN_LANGS as string[]).includes(value);
@@ -70,6 +72,45 @@ export function clampInt(value: unknown, min: number, max: number, fallback: num
 
 export function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+export function isGlossaryEntry(value: unknown): value is GlossaryEntry {
+  if (!isPlainRecord(value)) {
+    return false;
+  }
+  const source = value.source;
+  const target = value.target;
+  return (
+    typeof source === 'string' &&
+    typeof target === 'string' &&
+    source.trim().length > 0 &&
+    target.trim().length > 0 &&
+    source.trim().length <= MAX_GLOSSARY_TERM_LENGTH &&
+    target.trim().length <= MAX_GLOSSARY_TERM_LENGTH
+  );
+}
+
+export function normalizeGlossary(value: unknown): GlossaryEntry[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const result: GlossaryEntry[] = [];
+  for (const item of value) {
+    if (!isGlossaryEntry(item)) {
+      continue;
+    }
+    const source = item.source.trim();
+    if (seen.has(source)) {
+      continue;
+    }
+    seen.add(source);
+    result.push({ source, target: item.target.trim() });
+    if (result.length >= MAX_GLOSSARY_ENTRIES) {
+      break;
+    }
+  }
+  return result;
 }
 
 export function assertNever(value: never): never {

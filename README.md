@@ -93,6 +93,39 @@ Then in Chrome:
 5. Text blocks inside that container are translated in place; use **Restore original**
    any time to switch back.
 
+### 5. Site-scoped glossary (terminology)
+
+Per-site terminology (e.g. a game or novel site where `冒険者` must always become
+`모험가`) is stored on the selector rule and applied in both translation paths:
+
+1. Open **Options → Saved selector rules → Edit**.
+2. In **Glossary**, add one mapping per line: `source -> target`
+   (also accepts `source → target`; lines starting with `#` are comments).
+3. Save the rule. The glossary is written into the prompt (stable order, so
+   llama.cpp/Ollama KV caches are reused) and a deterministic post-replacement
+   step guarantees the terms always appear.
+
+Glossary entries apply in the rule's translation direction (e.g. `ja → ko`): when
+translating, only rules whose source/target languages match the current
+translation direction contribute their glossary, so mappings never leak into
+reverse-direction translations. Rules without an explicit source/target fall back
+to the default language settings. Up to 50 entries per rule; terms are 1–200
+characters. No fine-tuning is needed — HY-MT1.5's native terminology-intervention
+prompt feature handles this.
+
+### 6. Translation history
+
+Every successful translation is logged:
+
+- **Gateway path**: appended to a JSONL file (`gateway/data/translation_log.jsonl`
+  by default, rotated at 200 MB). Disable with `LST_TRANSLATION_LOG_ENABLED=false`,
+  relocate with `LST_TRANSLATION_LOG_PATH=/path/to/log.jsonl`.
+- **Direct path (Ollama / llama.cpp)**: stored in the browser
+  (`chrome.storage.local`, most recent 2000 entries). Export or clear it from
+  **Options → Translation history**.
+
+This logged source/translation data is the future dataset for a per-site LoRA.
+
 ## How it stays safe
 
 - Text is extracted with a `TreeWalker` and sent as plain text — never `innerHTML`,

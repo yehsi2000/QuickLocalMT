@@ -91,6 +91,7 @@ def create_app() -> FastAPI:
                 payload.source_lang,
                 payload.target_lang,
                 payload.preset,
+                payload.glossary,
             )
             return TranslateResponse(**result)
         except TranslationError as exc:

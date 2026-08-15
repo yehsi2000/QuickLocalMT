@@ -5,8 +5,9 @@ import {
   saveSettings,
   updateDomainRule,
 } from '../background/settings';
-import { isValidGatewayUrl, isValidSelector } from '../shared/validation';
-import type { DomainRule, ExtensionSettings, ProviderKind } from '../shared/types';
+import { clearHistory, exportHistoryJsonl, getHistory } from '../background/history';
+import { isValidGatewayUrl, isValidSelector, normalizeGlossary } from '../shared/validation';
+import type { DomainRule, ExtensionSettings, GlossaryEntry, ProviderKind } from '../shared/types';
 
 function byId<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -39,12 +40,18 @@ const ruleSelector = byId<HTMLInputElement>('rule-selector');
 const ruleExcluded = byId<HTMLInputElement>('rule-excluded');
 const ruleSource = byId<HTMLSelectElement>('rule-source');
 const ruleTarget = byId<HTMLSelectElement>('rule-target');
+const ruleGlossary = byId<HTMLTextAreaElement>('rule-glossary');
+const glossaryCount = byId<HTMLSpanElement>('glossary-count');
+const glossaryErrors = byId<HTMLDivElement>('glossary-errors');
 const ruleSaveBtn = byId<HTMLButtonElement>('rule-save');
 const ruleTestBtn = byId<HTMLButtonElement>('rule-test');
 const ruleDeleteBtn = byId<HTMLButtonElement>('rule-delete');
 const ruleCancelBtn = byId<HTMLButtonElement>('rule-cancel');
 const ruleMsg = byId<HTMLDivElement>('rule-msg');
 const testResult = byId<HTMLDivElement>('test-result');
+const exportHistoryBtn = byId<HTMLButtonElement>('export-history');
+const clearHistoryBtn = byId<HTMLButtonElement>('clear-history');
+const historyMsg = byId<HTMLSpanElement>('history-msg');
 
 let settings: ExtensionSettings = {
   provider: 'gateway',
@@ -71,6 +78,70 @@ function flashMessage(element: HTMLElement, message: string, kind: 'ok' | 'err')
       element.className = 'msg';
     }
   }, 3000);
+}
+
+const MAX_GLOSSARY_TERM_LENGTH = 200;
+
+function findSeparator(line: string): number {
+  const asciiIdx = line.indexOf('->');
+  const unicodeIdx = line.indexOf('→');
+  if (asciiIdx < 0) {
+    return unicodeIdx;
+  }
+  if (unicodeIdx < 0) {
+    return asciiIdx;
+  }
+  return Math.min(asciiIdx, unicodeIdx);
+}
+
+export function parseGlossaryText(text: string): { entries: GlossaryEntry[]; errors: string[] } {
+  const entries: GlossaryEntry[] = [];
+  const errors: string[] = [];
+  const lines = text.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? '';
+    const trimmed = line.trim();
+    if (trimmed.length === 0 || trimmed.startsWith('#')) {
+      continue;
+    }
+    const sepIndex = findSeparator(line);
+    if (sepIndex < 0) {
+      errors.push(`Line ${index + 1}: expected "source -> target"`);
+      continue;
+    }
+    const source = line.slice(0, sepIndex).trim();
+    const target = line
+      .slice(sepIndex + (line.startsWith('->', sepIndex) ? 2 : 1))
+      .trim();
+    if (source.length === 0 || target.length === 0) {
+      errors.push(`Line ${index + 1}: source and target are both required`);
+      continue;
+    }
+    if (source.length > MAX_GLOSSARY_TERM_LENGTH || target.length > MAX_GLOSSARY_TERM_LENGTH) {
+      errors.push(`Line ${index + 1}: terms must be at most ${MAX_GLOSSARY_TERM_LENGTH} characters`);
+      continue;
+    }
+    entries.push({ source, target });
+  }
+  return { entries, errors };
+}
+
+function updateGlossaryPreview(): void {
+  const parsed = parseGlossaryText(ruleGlossary.value);
+  const normalized = normalizeGlossary(parsed.entries);
+  const count = normalized.length;
+  glossaryCount.textContent = `${count} term${count === 1 ? '' : 's'}`;
+  glossaryErrors.textContent = parsed.errors.slice(0, 8).join('\n');
+}
+
+function downloadBlob(filename: string, content: string, type: string): void {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 function renderRules(): void {
@@ -136,6 +207,8 @@ function openEditor(rule: DomainRule | null): void {
   ruleExcluded.value = rule?.excludedSelectors.join(', ') ?? '';
   ruleSource.value = rule?.sourceLang ?? '';
   ruleTarget.value = rule?.targetLang ?? '';
+  ruleGlossary.value = (rule?.glossary ?? []).map((entry) => `${entry.source} -> ${entry.target}`).join('\n');
+  updateGlossaryPreview();
   ruleDeleteBtn.style.display = rule ? 'inline-block' : 'none';
   testResult.textContent = '';
   testResult.style.display = 'none';
@@ -267,6 +340,11 @@ ruleSaveBtn.addEventListener('click', async () => {
     flashMessage(ruleMsg, 'Enter a valid CSS selector.', 'err');
     return;
   }
+  const parsedGlossary = parseGlossaryText(ruleGlossary.value);
+  if (parsedGlossary.errors.length > 0) {
+    flashMessage(ruleMsg, 'Fix glossary errors before saving.', 'err');
+    return;
+  }
   const base = {
     hostname,
     pathPattern: rulePath.value.trim() || undefined,
@@ -277,6 +355,7 @@ ruleSaveBtn.addEventListener('click', async () => {
       .filter((item) => item.length > 0),
     sourceLang: (ruleSource.value || undefined) as DomainRule['sourceLang'],
     targetLang: (ruleTarget.value || undefined) as DomainRule['targetLang'],
+    glossary: normalizeGlossary(parsedGlossary.entries),
     enabled: true,
   };
   if (editingRuleId) {
@@ -302,5 +381,25 @@ ruleDeleteBtn.addEventListener('click', async () => {
 });
 
 ruleCancelBtn.addEventListener('click', closeEditor);
+
+ruleGlossary.addEventListener('input', updateGlossaryPreview);
+
+exportHistoryBtn.addEventListener('click', async () => {
+  const entries = await getHistory();
+  if (entries.length === 0) {
+    flashMessage(historyMsg, 'No history to export.', 'err');
+    return;
+  }
+  downloadBlob('translation-history.jsonl', exportHistoryJsonl(entries), 'application/x-ndjson');
+  flashMessage(historyMsg, `Exported ${entries.length} entries.`, 'ok');
+});
+
+clearHistoryBtn.addEventListener('click', async () => {
+  if (!window.confirm('Clear all translation history? This cannot be undone.')) {
+    return;
+  }
+  await clearHistory();
+  flashMessage(historyMsg, 'History cleared.', 'ok');
+});
 
 void loadAndRender();

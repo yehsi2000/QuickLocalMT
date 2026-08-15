@@ -17,7 +17,14 @@ export type TranslateFunction = (
 ) => Promise<string>;
 
 export type QueueResult =
-  | { ok: true; blockId: string; translation: string }
+  | {
+      ok: true;
+      blockId: string;
+      translation: string;
+      sourceText: string;
+      sourceLang: string;
+      targetLang: string;
+    }
   | { ok: false; blockId: string; error: BlockError };
 
 export type QueueSummary = {
@@ -150,13 +157,21 @@ export class TranslationQueue {
 
   private async processJob(job: QueueJob): Promise<void> {
     const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const okResult = (translation: string): QueueResult => ({
+      ok: true,
+      blockId: job.blockId,
+      translation,
+      sourceText: job.text,
+      sourceLang: job.sourceLang,
+      targetLang: job.targetLang,
+    });
     try {
       const translation = await this.attemptTranslate(job);
       if (this.aborted) {
         return;
       }
       this.completedCount += 1;
-      this.onResult({ ok: true, blockId: job.blockId, translation });
+      this.onResult(okResult(translation));
     } catch (error) {
       if (this.aborted) {
         return;
@@ -169,7 +184,7 @@ export class TranslationQueue {
             return;
           }
           this.completedCount += 1;
-          this.onResult({ ok: true, blockId: job.blockId, translation });
+          this.onResult(okResult(translation));
         } catch (retryError) {
           if (this.aborted) {
             return;

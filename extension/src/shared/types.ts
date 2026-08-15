@@ -2,6 +2,11 @@ export type LangCode = 'auto' | 'ko' | 'en' | 'ja';
 
 export type ProviderKind = 'gateway' | 'ollama' | 'llamacpp';
 
+export type GlossaryEntry = {
+  source: string;
+  target: string;
+};
+
 export type ExtensionSettings = {
   provider: ProviderKind;
   gatewayBaseUrl: string;
@@ -25,6 +30,7 @@ export type DomainRule = {
   excludedSelectors: string[];
   sourceLang?: LangCode;
   targetLang?: Exclude<LangCode, 'auto'>;
+  glossary?: GlossaryEntry[];
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -47,6 +53,7 @@ export type GatewayTranslateRequest = {
   source_lang: string;
   target_lang: string;
   preset?: string;
+  glossary?: GlossaryEntry[];
 };
 
 export type GatewayTranslateResponse = {
