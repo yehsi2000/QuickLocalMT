@@ -214,15 +214,15 @@ supported via the existing language codes.
 
 ### Design
 
-- **Data model.** A glossary lives on `DomainRule` (`DomainRule.glossary`,
-  entries `{ source, target }`, max 50 per rule). The extension sanitizes stored
-  rules (`normalizeGlossary`), dedupes by `source` (first rule wins) and caps at
-  50 before sending.
-- **Direction scoping.** A rule contributes its glossary only when the current
-  translation direction matches the rule's `sourceLang`/`targetLang` (unset
-  languages fall back to the defaults; a rule's or translation's `auto` source
-  matches any source). Reverse-direction translations never receive the
-  glossary, so the post-replacement step cannot corrupt output.
+- **Data model.** A glossary lives on `ExtensionSettings.siteGlossaries`
+  (`SiteGlossary { hostname, glossary: [{ source, target }] }`, max 50 entries
+  per site). It is keyed by hostname — one per site, independent of selector
+  rules. The extension sanitizes stored glossaries (`normalizeGlossary`),
+  dedupes by `source` (first occurrence wins) and caps at 50 before sending.
+  Legacy per-rule `glossary` fields are migrated into the site glossary on load.
+- **Site scoping.** A translation on a hostname always receives that site's
+  glossary, regardless of which selector rule matched or the translation
+  direction. This keeps the vocabulary predictable — one set of terms per site.
 - **Two identical code paths.** Both prompt builders are updated together —
   `gateway/app/prompt_builder.py` (gateway path) and
   `extension/src/shared/prompt.ts` (direct Ollama/llama.cpp path). The shared

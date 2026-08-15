@@ -7,6 +7,11 @@ export type GlossaryEntry = {
   target: string;
 };
 
+export type SiteGlossary = {
+  hostname: string;
+  glossary: GlossaryEntry[];
+};
+
 export type ExtensionSettings = {
   provider: ProviderKind;
   gatewayBaseUrl: string;
@@ -20,6 +25,7 @@ export type ExtensionSettings = {
   textChunkMaxChars: number;
   autoUseSavedRule: boolean;
   domainRules: DomainRule[];
+  siteGlossaries: SiteGlossary[];
 };
 
 export type DomainRule = {

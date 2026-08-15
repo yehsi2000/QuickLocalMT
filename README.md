@@ -93,25 +93,24 @@ Then in Chrome:
 5. Text blocks inside that container are translated in place; use **Restore original**
    any time to switch back.
 
-### 5. Site-scoped glossary (terminology)
+### 5. Per-site vocabulary (단어장)
 
 Per-site terminology (e.g. a game or novel site where `冒険者` must always become
-`모험가`) is stored on the selector rule and applied in both translation paths:
+`모험가`) is stored **once per site** in a dedicated **Vocabulary** tab and
+applied in both translation paths:
 
-1. Open **Options → Saved selector rules → Edit**.
-2. In **Glossary**, add one mapping per line: `source -> target`
-   (also accepts `source → target`; lines starting with `#` are comments).
-3. Save the rule. The glossary is written into the prompt (stable order, so
-   llama.cpp/Ollama KV caches are reused) and a deterministic post-replacement
-   step guarantees the terms always appear.
+1. Open **Options → Vocabulary → Add vocabulary**.
+2. Enter the site hostname (e.g. `syosetu.example.com`) and add one mapping per
+   line: `source -> target` (also accepts `source → target`; lines starting with
+   `#` are comments).
+3. Save. Whenever a translation happens on that site, the vocabulary is written
+   into the prompt (stable order, so llama.cpp/Ollama KV caches are reused) and a
+   deterministic post-replacement step guarantees the terms always appear.
 
-Glossary entries apply in the rule's translation direction (e.g. `ja → ko`): when
-translating, only rules whose source/target languages match the current
-translation direction contribute their glossary, so mappings never leak into
-reverse-direction translations. Rules without an explicit source/target fall back
-to the default language settings. Up to 50 entries per rule; terms are 1–200
-characters. No fine-tuning is needed — HY-MT1.5's native terminology-intervention
-prompt feature handles this.
+The vocabulary is keyed by hostname — one per site, independent of how many
+selector rules exist for that site and of the translation direction. Up to 50
+entries per site; terms are 1–200 characters. No fine-tuning is needed —
+HY-MT1.5's native terminology-intervention prompt feature handles this.
 
 ### 6. Translation history
 

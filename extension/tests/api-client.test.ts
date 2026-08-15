@@ -16,6 +16,7 @@ function makeSettings(overrides: Partial<ExtensionSettings> = {}): ExtensionSett
     textChunkMaxChars: 1200,
     autoUseSavedRule: false,
     domainRules: [],
+    siteGlossaries: [],
     ...overrides,
   };
 }

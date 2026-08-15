@@ -1,4 +1,4 @@
-import type { DomainRule, ExtensionSettings, LangCode } from '../shared/types';
+import type { DomainRule, ExtensionSettings, GlossaryEntry, LangCode, SiteGlossary } from '../shared/types';
 import {
   clampInt,
   isPlainRecord,
@@ -26,6 +26,7 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   textChunkMaxChars: 1200,
   autoUseSavedRule: false,
   domainRules: [],
+  siteGlossaries: [],
 };
 
 const SETTINGS_KEY = 'extensionSettings';
@@ -64,14 +65,58 @@ function sanitizeRule(value: unknown): DomainRule | null {
   };
 }
 
+function sanitizeSiteGlossary(value: unknown): SiteGlossary | null {
+  if (!isPlainRecord(value)) {
+    return null;
+  }
+  const hostname = typeof value.hostname === 'string' ? value.hostname.trim().toLowerCase() : '';
+  if (hostname.length === 0 || hostname.length > 253) {
+    return null;
+  }
+  return {
+    hostname,
+    glossary: normalizeGlossary(value.glossary),
+  };
+}
+
 export function sanitizeSettings(raw: unknown): ExtensionSettings {
   const record = isPlainRecord(raw) ? raw : {};
-  const rules = Array.isArray(record.domainRules)
-    ? record.domainRules
-        .map(sanitizeRule)
-        .filter((rule): rule is DomainRule => rule !== null)
+  const rawRules = Array.isArray(record.domainRules) ? record.domainRules : [];
+  const rules = rawRules
+    .map(sanitizeRule)
+    .filter((rule): rule is DomainRule => rule !== null)
+    .slice(0, 200);
+  const siteGlossaries = Array.isArray(record.siteGlossaries)
+    ? record.siteGlossaries
+        .map(sanitizeSiteGlossary)
+        .filter((entry): entry is SiteGlossary => entry !== null)
         .slice(0, 200)
     : [];
+  const glossaryByHost = new Map<string, GlossaryEntry[]>();
+  for (const site of siteGlossaries) {
+    if (!glossaryByHost.has(site.hostname)) {
+      glossaryByHost.set(site.hostname, site.glossary);
+    }
+  }
+  for (const rawRule of rawRules) {
+    const rule = sanitizeRule(rawRule);
+    if (!rule) {
+      continue;
+    }
+    const legacy = normalizeGlossary(
+      isPlainRecord(rawRule) ? rawRule.glossary : undefined,
+    );
+    if (legacy.length === 0) {
+      continue;
+    }
+    glossaryByHost.set(
+      rule.hostname.toLowerCase(),
+      normalizeGlossary([...(glossaryByHost.get(rule.hostname.toLowerCase()) ?? []), ...legacy]),
+    );
+  }
+  const mergedSiteGlossaries: SiteGlossary[] = Array.from(glossaryByHost.entries()).map(
+    ([hostname, glossary]) => ({ hostname, glossary }),
+  );
   const provider =
     record.provider === 'ollama' || record.provider === 'llamacpp' ? record.provider : 'gateway';
   return {
@@ -93,6 +138,7 @@ export function sanitizeSettings(raw: unknown): ExtensionSettings {
     textChunkMaxChars: clampInt(record.textChunkMaxChars, 200, 8000, DEFAULT_SETTINGS.textChunkMaxChars),
     autoUseSavedRule: typeof record.autoUseSavedRule === 'boolean' ? record.autoUseSavedRule : false,
     domainRules: rules,
+    siteGlossaries: mergedSiteGlossaries,
   };
 }
 
@@ -203,24 +249,40 @@ export function findRulesForUrl(rules: DomainRule[], url: string): DomainRule[] 
   return matched;
 }
 
-export function rulesForTranslation(
-  rules: DomainRule[],
-  sourceLang: string,
-  targetLang: string,
-  defaultSourceLang: LangCode,
-  defaultTargetLang: Exclude<LangCode, 'auto'>,
-): DomainRule[] {
-  return rules.filter((rule) => {
-    if (!rule.enabled) {
-      return false;
-    }
-    const ruleSource = rule.sourceLang ?? defaultSourceLang;
-    const ruleTarget = rule.targetLang ?? defaultTargetLang;
-    const sourceMatches =
-      ruleSource === 'auto' || sourceLang === 'auto' || ruleSource === sourceLang;
-    const targetMatches = ruleTarget === targetLang;
-    return sourceMatches && targetMatches;
+export function siteGlossaryForHostname(
+  siteGlossaries: SiteGlossary[],
+  hostname: string,
+): GlossaryEntry[] {
+  const match = siteGlossaries.find((entry) => entry.hostname === hostname);
+  return match ? match.glossary : [];
+}
+
+export async function upsertSiteGlossary(
+  hostname: string,
+  glossary: GlossaryEntry[],
+): Promise<void> {
+  const settings = await loadSettings();
+  const normalizedHostname = hostname.trim().toLowerCase();
+  const updated = sanitizeSettings({
+    ...settings,
+    siteGlossaries: [
+      ...settings.siteGlossaries.filter((entry) => entry.hostname !== normalizedHostname),
+      { hostname: normalizedHostname, glossary: normalizeGlossary(glossary) },
+    ],
   });
+  await chrome.storage.local.set({ [SETTINGS_KEY]: updated });
+}
+
+export async function deleteSiteGlossary(hostname: string): Promise<void> {
+  const settings = await loadSettings();
+  const normalizedHostname = hostname.trim().toLowerCase();
+  const updated = sanitizeSettings({
+    ...settings,
+    siteGlossaries: settings.siteGlossaries.filter(
+      (entry) => entry.hostname !== normalizedHostname,
+    ),
+  });
+  await chrome.storage.local.set({ [SETTINGS_KEY]: updated });
 }
 
 export function langForRule(rule: DomainRule | null, settings: ExtensionSettings): {

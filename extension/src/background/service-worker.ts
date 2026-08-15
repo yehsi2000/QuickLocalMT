@@ -1,10 +1,15 @@
 import { getProviderHealth, translateChunk } from './api-client';
 import { addHistoryEntry } from './history';
 import { TranslationQueue, type QueueResult, type QueueSummary } from './translation-queue';
-import { addDomainRule, findRulesForUrl, hostnameFromUrl, loadSettings, rulesForTranslation } from './settings';
+import {
+  addDomainRule,
+  findRulesForUrl,
+  hostnameFromUrl,
+  loadSettings,
+  siteGlossaryForHostname,
+} from './settings';
 import { isExtensionMessage, type ExtensionMessage } from '../shared/messages';
 import type { GlossaryEntry } from '../shared/types';
-import { normalizeGlossary } from '../shared/validation';
 
 type SessionState = {
   status: 'idle' | 'running';
@@ -260,18 +265,9 @@ async function handleMessage(
       }
       const tabId = sender.tab.id;
       const settings = await loadSettings();
-      const tabUrl = sender.tab.url ?? '';
-      const rules = findRulesForUrl(settings.domainRules, tabUrl);
-      const directionRules = rulesForTranslation(
-        rules,
-        message.sourceLang,
-        message.targetLang,
-        settings.defaultSourceLang,
-        settings.defaultTargetLang,
-      );
-      const mergedGlossary = normalizeGlossary(directionRules.flatMap((rule) => rule.glossary ?? []));
-      const hostname = hostnameFromUrl(tabUrl);
-      const queue = queueForTab(tabId, settings, mergedGlossary, hostname);
+      const hostname = hostnameFromUrl(sender.tab.url ?? '');
+      const glossary = siteGlossaryForHostname(settings.siteGlossaries, hostname);
+      const queue = queueForTab(tabId, settings, glossary, hostname);
       queue.runSession(
         message.blocks.map((block) => ({
           requestId: message.requestId,

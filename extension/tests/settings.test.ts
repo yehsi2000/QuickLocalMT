@@ -1,67 +1,102 @@
 import { describe, expect, it } from 'vitest';
-import { rulesForTranslation } from '../src/background/settings';
-import type { DomainRule } from '../src/shared/types';
+import { sanitizeSettings, siteGlossaryForHostname } from '../src/background/settings';
+import type { SiteGlossary } from '../src/shared/types';
 
-function makeRule(overrides: Partial<DomainRule> = {}): DomainRule {
+function makeSiteGlossary(overrides: Partial<SiteGlossary> = {}): SiteGlossary {
   return {
-    id: 'r1',
     hostname: 'example.com',
-    selector: '.main',
-    excludedSelectors: [],
-    enabled: true,
-    createdAt: '2026-01-01T00:00:00.000Z',
-    updatedAt: '2026-01-01T00:00:00.000Z',
+    glossary: [{ source: '冒険者', target: '모험가' }],
     ...overrides,
   };
 }
 
-describe('rulesForTranslation', () => {
-  it('includes rules whose explicit direction matches the translation', () => {
-    const rules = [
-      makeRule({
-        sourceLang: 'ja',
-        targetLang: 'ko',
+describe('siteGlossaryForHostname', () => {
+  it('returns the glossary for the matching hostname', () => {
+    const site = makeSiteGlossary({ glossary: [{ source: '冒険者', target: '모험가' }] });
+    expect(siteGlossaryForHostname([site], 'example.com')).toEqual([
+      { source: '冒険者', target: '모험가' },
+    ]);
+  });
+
+  it('returns an empty list for an unknown hostname', () => {
+    expect(siteGlossaryForHostname([makeSiteGlossary()], 'other.example.com')).toEqual([]);
+  });
+
+  it('returns an empty list when there are no glossaries', () => {
+    expect(siteGlossaryForHostname([], 'example.com')).toEqual([]);
+  });
+});
+
+describe('sanitizeSettings siteGlossaries', () => {
+  it('sanitizes site glossaries and normalizes hostnames', () => {
+    const settings = sanitizeSettings({
+      siteGlossaries: [
+        {
+          hostname: ' Example.com ',
+          glossary: [
+            { source: ' 冒険者 ', target: '모험가' },
+            { source: '', target: 'bad' },
+          ],
+        },
+        { hostname: '', glossary: [] },
+      ],
+    });
+    expect(settings.siteGlossaries).toEqual([
+      {
+        hostname: 'example.com',
         glossary: [{ source: '冒険者', target: '모험가' }],
-      }),
-    ];
-    expect(rulesForTranslation(rules, 'ja', 'ko', 'auto', 'en')).toHaveLength(1);
+      },
+    ]);
   });
 
-  it('excludes rules whose target differs from the translation target', () => {
-    const rules = [
-      makeRule({ sourceLang: 'ja', targetLang: 'ko', glossary: [{ source: '冒険者', target: '모험가' }] }),
-    ];
-    expect(rulesForTranslation(rules, 'ja', 'ja', 'auto', 'en')).toHaveLength(0);
+  it('dedupes sites by hostname keeping the first', () => {
+    const settings = sanitizeSettings({
+      siteGlossaries: [
+        makeSiteGlossary({ hostname: 'example.com', glossary: [{ source: 'a', target: '가' }] }),
+        makeSiteGlossary({ hostname: 'example.com', glossary: [{ source: 'b', target: '나' }] }),
+      ],
+    });
+    expect(settings.siteGlossaries).toHaveLength(1);
+    expect(settings.siteGlossaries[0]?.glossary).toEqual([{ source: 'a', target: '가' }]);
   });
 
-  it('excludes rules whose explicit source differs from the translation source', () => {
-    const rules = [makeRule({ sourceLang: 'ja', targetLang: 'ko' })];
-    expect(rulesForTranslation(rules, 'en', 'ko', 'auto', 'en')).toHaveLength(0);
+  it('migrates legacy rule glossaries into per-site glossaries', () => {
+    const settings = sanitizeSettings({
+      domainRules: [
+        {
+          id: 'r1',
+          hostname: 'example.com',
+          selector: '.main',
+          excludedSelectors: [],
+          enabled: true,
+          glossary: [{ source: '冒険者', target: '모험가' }],
+        },
+      ],
+      siteGlossaries: [
+        makeSiteGlossary({ hostname: 'example.com', glossary: [{ source: 'existing', target: '기존' }] }),
+      ],
+    });
+    expect(settings.siteGlossaries).toHaveLength(1);
+    expect(settings.siteGlossaries[0]?.glossary).toEqual([
+      { source: 'existing', target: '기존' },
+      { source: '冒険者', target: '모험가' },
+    ]);
   });
 
-  it('matches any source when the rule has no explicit source (default auto)', () => {
-    const rules = [makeRule({ targetLang: 'ko', glossary: [{ source: 'magic', target: '마법' }] })];
-    expect(rulesForTranslation(rules, 'en', 'ko', 'auto', 'en')).toHaveLength(1);
-    expect(rulesForTranslation(rules, 'ja', 'ko', 'auto', 'en')).toHaveLength(1);
-  });
-
-  it('matches the default target when the rule has no explicit target', () => {
-    const rules = [makeRule({ sourceLang: 'ko' })];
-    expect(rulesForTranslation(rules, 'ko', 'en', 'auto', 'en')).toHaveLength(1);
-    expect(rulesForTranslation(rules, 'ko', 'ja', 'auto', 'en')).toHaveLength(0);
-  });
-
-  it('treats an auto-detect translation source as a wildcard when the target matches', () => {
-    const rules = [makeRule({ sourceLang: 'ja', targetLang: 'ko' }), makeRule({ sourceLang: 'en', targetLang: 'ko' })];
-    expect(rulesForTranslation(rules, 'auto', 'ko', 'auto', 'en')).toHaveLength(2);
-  });
-
-  it('excludes disabled rules', () => {
-    const rules = [makeRule({ sourceLang: 'ja', targetLang: 'ko', enabled: false })];
-    expect(rulesForTranslation(rules, 'ja', 'ko', 'auto', 'en')).toHaveLength(0);
-  });
-
-  it('returns an empty list when nothing matches', () => {
-    expect(rulesForTranslation([], 'ja', 'ko', 'auto', 'en')).toEqual([]);
+  it('strips glossary from migrated rules', () => {
+    const settings = sanitizeSettings({
+      domainRules: [
+        {
+          id: 'r1',
+          hostname: 'example.com',
+          selector: '.main',
+          excludedSelectors: [],
+          enabled: true,
+          glossary: [{ source: '冒険者', target: '모험가' }],
+        },
+      ],
+    });
+    expect(settings.domainRules).toHaveLength(1);
+    expect('glossary' in settings.domainRules[0]!).toBe(false);
   });
 });
