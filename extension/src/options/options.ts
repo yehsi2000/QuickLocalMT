@@ -42,9 +42,6 @@ const ruleSelector = byId<HTMLInputElement>('rule-selector');
 const ruleExcluded = byId<HTMLInputElement>('rule-excluded');
 const ruleSource = byId<HTMLSelectElement>('rule-source');
 const ruleTarget = byId<HTMLSelectElement>('rule-target');
-const ruleGlossary = byId<HTMLTextAreaElement>('rule-glossary');
-const glossaryCount = byId<HTMLSpanElement>('glossary-count');
-const glossaryErrors = byId<HTMLDivElement>('glossary-errors');
 const ruleSaveBtn = byId<HTMLButtonElement>('rule-save');
 const ruleTestBtn = byId<HTMLButtonElement>('rule-test');
 const ruleDeleteBtn = byId<HTMLButtonElement>('rule-delete');
@@ -238,8 +235,6 @@ function openEditor(rule: DomainRule | null): void {
   ruleExcluded.value = rule?.excludedSelectors.join(', ') ?? '';
   ruleSource.value = rule?.sourceLang ?? '';
   ruleTarget.value = rule?.targetLang ?? '';
-  ruleGlossary.value = (rule?.glossary ?? []).map((entry) => `${entry.source} -> ${entry.target}`).join('\n');
-  updateGlossaryPreview();
   ruleDeleteBtn.style.display = rule ? 'inline-block' : 'none';
   testResult.textContent = '';
   testResult.style.display = 'none';
@@ -432,11 +427,6 @@ ruleSaveBtn.addEventListener('click', async () => {
     flashMessage(ruleMsg, 'Enter a valid CSS selector.', 'err');
     return;
   }
-  const parsedGlossary = parseGlossaryText(ruleGlossary.value);
-  if (parsedGlossary.errors.length > 0) {
-    flashMessage(ruleMsg, 'Fix glossary errors before saving.', 'err');
-    return;
-  }
   const base = {
     hostname,
     pathPattern: rulePath.value.trim() || undefined,
@@ -447,7 +437,6 @@ ruleSaveBtn.addEventListener('click', async () => {
       .filter((item) => item.length > 0),
     sourceLang: (ruleSource.value || undefined) as DomainRule['sourceLang'],
     targetLang: (ruleTarget.value || undefined) as DomainRule['targetLang'],
-    glossary: normalizeGlossary(parsedGlossary.entries),
     enabled: true,
   };
   if (editingRuleId) {

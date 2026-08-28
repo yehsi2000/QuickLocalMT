@@ -15,7 +15,7 @@ const sourceSelect = byId<HTMLSelectElement>('source-lang');
 const targetSelect = byId<HTMLSelectElement>('target-lang');
 const selectAreaBtn = byId<HTMLButtonElement>('select-area');
 const translateSavedBtn = byId<HTMLButtonElement>('translate-saved');
-const restoreBtn = byId<HTMLButtonElement>('restore');
+const toggleViewBtn = byId<HTMLButtonElement>('restore');
 const cancelBtn = byId<HTMLButtonElement>('cancel');
 const progressEl = byId<HTMLParagraphElement>('progress');
 const optionsLink = byId<HTMLAnchorElement>('open-options');
@@ -24,7 +24,8 @@ let gatewayConnected = false;
 let gatewayError: string | null = null;
 let pageRules: DomainRule[] = [];
 let running = false;
-let translated = false;
+let hasCache = false;
+let viewMode: 'original' | 'translated' = 'translated';
 
 async function sendMessage(message: ExtensionMessage): Promise<unknown> {
   try {
@@ -56,7 +57,8 @@ function setRunning(isRunning: boolean): void {
 function updateButtons(): void {
   selectAreaBtn.disabled = running;
   translateSavedBtn.disabled = running || !gatewayConnected || pageRules.length === 0;
-  restoreBtn.disabled = running || !translated;
+  toggleViewBtn.disabled = running || !hasCache;
+  toggleViewBtn.textContent = viewMode === 'translated' ? 'Show original' : 'Show translation';
   cancelBtn.disabled = !running;
 }
 
@@ -86,7 +88,8 @@ async function refresh(): Promise<void> {
   if (stateResponse && stateResponse.type === 'PAGE_STATE') {
     pageRules = stateResponse.rules;
     running = stateResponse.inProgress;
-    translated = stateResponse.translated;
+    hasCache = stateResponse.hasCache;
+    viewMode = stateResponse.viewMode;
     if (running) {
       renderProgress(stateResponse.completed, stateResponse.total, stateResponse.failed);
     } else {
@@ -127,10 +130,12 @@ translateSavedBtn.addEventListener('click', async () => {
   renderProgress(0, 1, 0);
 });
 
-restoreBtn.addEventListener('click', async () => {
-  await sendMessage({ type: 'RESTORE' });
-  translated = false;
-  progressEl.classList.add('hidden');
+toggleViewBtn.addEventListener('click', async () => {
+  const response = (await sendMessage({ type: 'TOGGLE_VIEW' })) as
+    | { viewMode?: 'original' | 'translated'; hasCache?: boolean }
+    | undefined;
+  viewMode = response?.viewMode ?? (viewMode === 'translated' ? 'original' : 'translated');
+  hasCache = response?.hasCache ?? hasCache;
   updateButtons();
 });
 
@@ -156,7 +161,9 @@ chrome.runtime.onMessage.addListener((message: unknown) => {
   } else if (message.type === 'TRANSLATION_COMPLETE') {
     renderProgress(message.completed, message.completed + message.failed, message.failed);
     setRunning(false);
-    translated = message.completed > 0;
+    hasCache = hasCache || message.completed > 0;
+    viewMode = 'translated';
+    updateButtons();
   }
 });
 

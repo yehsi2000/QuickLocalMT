@@ -49,6 +49,13 @@ export type ExtensionMessage =
       type: 'RESTORE_ORIGINAL';
     }
   | {
+      type: 'SET_VIEW';
+      mode: 'original' | 'translated' | 'toggle';
+    }
+  | {
+      type: 'TOGGLE_VIEW';
+    }
+  | {
       type: 'CANCEL_TRANSLATION';
       requestId: string;
     }
@@ -82,6 +89,8 @@ export type ExtensionMessage =
   | {
       type: 'PAGE_STATE';
       translated: boolean;
+      hasCache: boolean;
+      viewMode: 'original' | 'translated';
       inProgress: boolean;
       total: number;
       completed: number;

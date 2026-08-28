@@ -36,7 +36,6 @@ export type DomainRule = {
   excludedSelectors: string[];
   sourceLang?: LangCode;
   targetLang?: Exclude<LangCode, 'auto'>;
-  glossary?: GlossaryEntry[];
   enabled: boolean;
   createdAt: string;
   updatedAt: string;

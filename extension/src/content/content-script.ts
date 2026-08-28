@@ -47,7 +47,7 @@ function boot(): void {
         .catch(() => undefined);
       if (failed > 0) {
         showError(`${failed} text block(s) could not be translated. Original text was kept.`);
-      } else if (completed === 0) {
+      } else if (completed === 0 && translator.lastRunFromCache === 0) {
         showError('No translatable text found in the selected area.');
       }
     },
@@ -153,6 +153,16 @@ function boot(): void {
         sendResponse({ type: 'RESULT_OK', restored });
         return;
       }
+      case 'SET_VIEW': {
+        const viewMode =
+          message.mode === 'toggle'
+            ? translator.toggleView()
+            : message.mode === 'original'
+              ? (translator.showOriginal(), 'original')
+              : (translator.showTranslation(), 'translated');
+        sendResponse({ type: 'RESULT_OK', viewMode, hasCache: translator.hasCache });
+        return;
+      }
       case 'CANCEL_TRANSLATION':
         translator.cancel();
         hideConfirm();
@@ -164,6 +174,8 @@ function boot(): void {
         sendResponse({
           type: 'PAGE_STATE',
           translated: pageState.count() > 0,
+          hasCache: translator.hasCache,
+          viewMode: translator.currentViewMode,
           inProgress: translator.isRunning,
           total: progress.total,
           completed: progress.completed,

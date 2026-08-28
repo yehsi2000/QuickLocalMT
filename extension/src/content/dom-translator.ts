@@ -23,6 +23,15 @@ type CollectionRoot = {
   excludedSelectors: string[];
 };
 
+export type ViewMode = 'original' | 'translated';
+
+function buildCacheKey(entries: SelectorEntry[], sourceLang: string, targetLang: string): string {
+  const areas = entries
+    .map((entry) => `${entry.selector}|${[...entry.excludedSelectors].sort().join(',')}`)
+    .sort();
+  return JSON.stringify([areas, sourceLang, targetLang]);
+}
+
 export class DomTranslator {
   private currentRequestId: string | null = null;
   private blocks: InternalBlock[] = [];
@@ -30,6 +39,9 @@ export class DomTranslator {
   private totalCount = 0;
   private completedCount = 0;
   private failedCount = 0;
+  private viewMode: ViewMode = 'translated';
+  private cacheKey: string | null = null;
+  private fromCacheCount = 0;
 
   constructor(private readonly events: TranslatorEvents) {}
 
@@ -49,8 +61,61 @@ export class DomTranslator {
     };
   }
 
+  get hasCache(): boolean {
+    return pageState.translatedCount() > 0;
+  }
+
+  get currentViewMode(): ViewMode {
+    return this.viewMode;
+  }
+
+  /** Nodes served from cache by the most recent start(); readable from onComplete. */
+  get lastRunFromCache(): number {
+    return this.fromCacheCount;
+  }
+
   cancel(): void {
     this.invalidate();
+  }
+
+  /** Swaps visible text without touching the cache, so it can be swapped back. */
+  showOriginal(): number {
+    let swapped = 0;
+    for (const record of pageState.all()) {
+      if (record.node.nodeValue !== record.originalText) {
+        record.node.nodeValue = record.originalText;
+      }
+      swapped += 1;
+    }
+    this.viewMode = 'original';
+    return swapped;
+  }
+
+  showTranslation(): number {
+    let swapped = 0;
+    for (const record of pageState.all()) {
+      if (record.status !== 'translated') {
+        continue;
+      }
+      if (record.node.nodeValue !== record.translatedText) {
+        record.node.nodeValue = record.translatedText;
+      }
+      swapped += 1;
+    }
+    this.viewMode = 'translated';
+    return swapped;
+  }
+
+  toggleView(): ViewMode {
+    if (!this.hasCache) {
+      return this.viewMode;
+    }
+    if (this.viewMode === 'translated') {
+      this.showOriginal();
+    } else {
+      this.showTranslation();
+    }
+    return this.viewMode;
   }
 
   async start(
@@ -59,14 +124,24 @@ export class DomTranslator {
     sourceLang: string,
     targetLang: string,
     options: Pick<CollectOptions, 'maxChars'>,
-  ): Promise<{ total: number } | { error: string }> {
+  ): Promise<{ total: number; fromCache: number } | { error: string }> {
     this.invalidate();
-    this.restoreRecords();
-    pageState.clear();
     if (entries.length === 0) {
+      this.hardReset();
       this.events.onError('No translation area selected.');
       return { error: 'SELECTOR_NO_MATCH' };
     }
+    const key = buildCacheKey(entries, sourceLang, targetLang);
+    // Same area and languages: keep the cached nodes so only new or failed text is sent.
+    const reuseCache = key === this.cacheKey && this.hasCache;
+    if (reuseCache) {
+      this.showTranslation();
+    } else {
+      this.hardReset();
+    }
+    this.cacheKey = key;
+    const fromCache = reuseCache ? pageState.translatedCount() : 0;
+    this.fromCacheCount = fromCache;
     const roots = this.resolveRoots(entries);
     if (roots.length === 0) {
       this.events.onError('The saved selectors matched no elements on this page.');
@@ -74,10 +149,11 @@ export class DomTranslator {
     }
     const collected = this.collectFromRoots(roots, options.maxChars);
     if (collected.length === 0) {
-      this.events.onComplete(0, 0);
-      return { total: 0 };
+      this.events.onComplete(fromCache, 0);
+      return { total: 0, fromCache };
     }
     this.currentRequestId = requestId;
+    this.viewMode = 'translated';
     this.totalCount = collected.length;
     this.completedCount = 0;
     this.failedCount = 0;
@@ -106,7 +182,7 @@ export class DomTranslator {
       sourceLang,
       targetLang,
     });
-    return { total: collected.length };
+    return { total: collected.length, fromCache };
   }
 
   private resolveRoots(entries: SelectorEntry[]): CollectionRoot[] {
@@ -197,10 +273,19 @@ export class DomTranslator {
     return true;
   }
 
+  /** Drops the cache entirely: originals come back and the next run re-translates everything. */
   restore(): number {
+    const count = this.hardReset();
+    this.invalidate();
+    return count;
+  }
+
+  private hardReset(): number {
     const count = this.restoreRecords();
     pageState.clear();
-    this.invalidate();
+    this.cacheKey = null;
+    this.viewMode = 'translated';
+    this.fromCacheCount = 0;
     return count;
   }
 

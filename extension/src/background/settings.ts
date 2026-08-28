@@ -58,7 +58,6 @@ function sanitizeRule(value: unknown): DomainRule | null {
     excludedSelectors,
     sourceLang: isValidLangCode(value.sourceLang) ? value.sourceLang : undefined,
     targetLang: isValidTargetLang(value.targetLang) ? value.targetLang : undefined,
-    glossary: normalizeGlossary(value.glossary),
     enabled: typeof value.enabled === 'boolean' ? value.enabled : true,
     createdAt: typeof value.createdAt === 'string' ? value.createdAt : new Date().toISOString(),
     updatedAt: typeof value.updatedAt === 'string' ? value.updatedAt : new Date().toISOString(),

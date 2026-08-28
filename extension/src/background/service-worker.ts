@@ -19,6 +19,7 @@ type SessionState = {
   completed: number;
   failed: number;
   translated: boolean;
+  viewMode: 'original' | 'translated';
 };
 
 const sessions = new Map<number, SessionState>();
@@ -33,6 +34,7 @@ function emptySession(): SessionState {
     completed: 0,
     failed: 0,
     translated: false,
+    viewMode: 'translated',
   };
 }
 
@@ -119,6 +121,7 @@ function queueForTab(
         session.failed = summary.failed;
         session.status = 'idle';
         session.translated = summary.completed > 0;
+        session.viewMode = 'translated';
         queues.delete(tabId);
       },
     });
@@ -193,6 +196,7 @@ async function handleMessage(
       })) as { restored: number } | undefined;
       const session = sessionForTab(tab.id);
       session.translated = false;
+      session.viewMode = 'translated';
       session.status = 'idle';
       session.requestId = null;
       session.selector = null;
@@ -200,6 +204,24 @@ async function handleMessage(
       session.completed = 0;
       session.failed = 0;
       return { type: 'RESULT_OK', restored: response?.restored ?? 0 };
+    }
+
+    case 'TOGGLE_VIEW': {
+      const tab = await getActiveTab();
+      await ensureContentScript(tab.id);
+      const response = (await chrome.tabs.sendMessage(tab.id, {
+        type: 'SET_VIEW',
+        mode: 'toggle',
+      } as ExtensionMessage)) as
+        | { viewMode?: 'original' | 'translated'; hasCache?: boolean }
+        | undefined;
+      const session = sessionForTab(tab.id);
+      session.viewMode = response?.viewMode ?? session.viewMode;
+      return {
+        type: 'RESULT_OK',
+        viewMode: session.viewMode,
+        hasCache: response?.hasCache ?? session.translated,
+      };
     }
 
     case 'OPEN_OPTIONS': {
@@ -229,6 +251,8 @@ async function handleMessage(
       let pageState: ExtensionMessage = {
         type: 'PAGE_STATE',
         translated: session.translated,
+        hasCache: session.translated,
+        viewMode: session.viewMode,
         inProgress: session.status === 'running',
         total: session.total,
         completed: session.completed,
@@ -245,6 +269,8 @@ async function handleMessage(
           pageState = {
             type: 'PAGE_STATE',
             translated: contentState.translated,
+            hasCache: contentState.hasCache,
+            viewMode: contentState.viewMode,
             inProgress: contentState.inProgress,
             total: contentState.total,
             completed: contentState.completed,

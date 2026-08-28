@@ -1,6 +1,6 @@
 import type { TranslationRecord } from '../shared/types';
 
-const records = new WeakMap<Text, TranslationRecord>();
+let records = new WeakMap<Text, TranslationRecord>();
 let knownNodes: Text[] = [];
 
 export const pageState = {
@@ -25,7 +25,11 @@ export const pageState = {
   count(): number {
     return knownNodes.length;
   },
+  translatedCount(): number {
+    return this.all().filter((record) => record.status === 'translated').length;
+  },
   clear(): void {
+    records = new WeakMap<Text, TranslationRecord>();
     knownNodes = [];
   },
 };

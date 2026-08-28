@@ -38,7 +38,7 @@ describe('DomTranslator', () => {
       'en',
       { maxChars: 1200 },
     );
-    expect(started).toEqual({ total: 1 });
+    expect(started).toEqual({ total: 1, fromCache: 0 });
 
     const sentMessage = chrome.sendMessage.mock.calls[0]?.[0] as {
       type: string;
@@ -152,7 +152,7 @@ describe('DomTranslator', () => {
       'en',
       { maxChars: 1200 },
     );
-    expect(started).toEqual({ total: 2 });
+    expect(started).toEqual({ total: 2, fromCache: 0 });
 
     const sentMessage = chrome.sendMessage.mock.calls[0]?.[0] as {
       type: string;
@@ -190,12 +190,168 @@ describe('DomTranslator', () => {
       'en',
       { maxChars: 1200 },
     );
-    expect(started).toEqual({ total: 1 });
+    expect(started).toEqual({ total: 1, fromCache: 0 });
 
     const sentMessage = chrome.sendMessage.mock.calls[0]?.[0] as { blocks: Array<{ id: string; text: string }> };
     expect(sentMessage.blocks.length).toBe(1);
 
     translator.applyResult('req-1', sentMessage.blocks[0]?.id as string, { translation: '번역된 텍스트' });
     expect(document.querySelector('p')?.textContent).toBe('번역된 텍스트');
+  });
+});
+
+describe('DomTranslator re-translation after restore', () => {
+  it('collects the same nodes again after Restore original', async () => {
+    const chrome = installChromeMock();
+    setupPage('<p>Hello world</p>');
+    const translator = new DomTranslator({
+      onProgress: () => undefined,
+      onComplete: () => undefined,
+      onError: () => undefined,
+    });
+    const selectors = [{ selector: '#article', excludedSelectors: [] }];
+
+    await translator.start('req-1', selectors, 'ko', 'en', { maxChars: 1200 });
+    const first = chrome.sendMessage.mock.calls[0]?.[0] as { blocks: Array<{ id: string }> };
+    translator.applyResult('req-1', first.blocks[0]?.id as string, { translation: '안녕하세요 세계' });
+    translator.restore();
+
+    const restarted = await translator.start('req-2', selectors, 'ko', 'en', { maxChars: 1200 });
+    expect(restarted).toEqual({ total: 1, fromCache: 0 });
+    const second = chrome.sendMessage.mock.calls[1]?.[0] as {
+      blocks: Array<{ id: string; text: string }>;
+    };
+    expect(second.blocks[0]?.text).toBe('Hello world');
+  });
+
+  it('restores nodes carried over from a cancelled run', async () => {
+    const chrome = installChromeMock();
+    setupPage('<p>Hello world</p>');
+    const translator = new DomTranslator({
+      onProgress: () => undefined,
+      onComplete: () => undefined,
+      onError: () => undefined,
+    });
+    const selectors = [{ selector: '#article', excludedSelectors: [] }];
+
+    await translator.start('req-1', selectors, 'ko', 'en', { maxChars: 1200 });
+    translator.cancel();
+
+    await translator.start('req-2', selectors, 'ko', 'en', { maxChars: 1200 });
+    const second = chrome.sendMessage.mock.calls[1]?.[0] as { blocks: Array<{ id: string }> };
+    translator.applyResult('req-2', second.blocks[0]?.id as string, { translation: '안녕하세요 세계' });
+
+    const paragraph = document.querySelector('p') as HTMLParagraphElement;
+    expect(paragraph.textContent).toBe('안녕하세요 세계');
+    expect(translator.restore()).toBe(1);
+    expect(paragraph.textContent).toBe('Hello world');
+  });
+});
+
+describe('DomTranslator view toggle and cache reuse', () => {
+  const selectors = [{ selector: '#article', excludedSelectors: [] }];
+
+  function makeTranslator(): DomTranslator {
+    return new DomTranslator({
+      onProgress: () => undefined,
+      onComplete: () => undefined,
+      onError: () => undefined,
+    });
+  }
+
+  async function translateOnce(
+    translator: DomTranslator,
+    chrome: ReturnType<typeof installChromeMock>,
+    requestId: string,
+    translation: string,
+  ): Promise<void> {
+    await translator.start(requestId, selectors, 'ko', 'en', { maxChars: 1200 });
+    const sent = chrome.sendMessage.mock.calls.at(-1)?.[0] as { blocks: Array<{ id: string }> };
+    translator.applyResult(requestId, sent.blocks[0]?.id as string, { translation });
+  }
+
+  it('toggles between original and translation without new requests', async () => {
+    const chrome = installChromeMock();
+    setupPage('<p>Hello world</p>');
+    const translator = makeTranslator();
+    await translateOnce(translator, chrome, 'req-1', '안녕하세요 세계');
+
+    const paragraph = document.querySelector('p') as HTMLParagraphElement;
+    const callsAfterTranslate = chrome.sendMessage.mock.calls.length;
+    expect(paragraph.textContent).toBe('안녕하세요 세계');
+
+    expect(translator.toggleView()).toBe('original');
+    expect(paragraph.textContent).toBe('Hello world');
+    expect(translator.toggleView()).toBe('translated');
+    expect(paragraph.textContent).toBe('안녕하세요 세계');
+    expect(chrome.sendMessage.mock.calls.length).toBe(callsAfterTranslate);
+    expect(translator.hasCache).toBe(true);
+  });
+
+  it('reuses the cache when selectors and languages are unchanged', async () => {
+    const chrome = installChromeMock();
+    setupPage('<p>Hello world</p>');
+    const translator = makeTranslator();
+    await translateOnce(translator, chrome, 'req-1', '안녕하세요 세계');
+    translator.showOriginal();
+    const callsBefore = chrome.sendMessage.mock.calls.length;
+
+    const result = await translator.start('req-2', selectors, 'ko', 'en', { maxChars: 1200 });
+    expect(result).toEqual({ total: 0, fromCache: 1 });
+    expect(chrome.sendMessage.mock.calls.length).toBe(callsBefore);
+    expect(document.querySelector('p')?.textContent).toBe('안녕하세요 세계');
+  });
+
+  it('re-translates everything when the target language changes', async () => {
+    const chrome = installChromeMock();
+    setupPage('<p>Hello world</p>');
+    const translator = makeTranslator();
+    await translateOnce(translator, chrome, 'req-1', '안녕하세요 세계');
+
+    const result = await translator.start('req-2', selectors, 'ko', 'ja', { maxChars: 1200 });
+    expect(result).toEqual({ total: 1, fromCache: 0 });
+    const sent = chrome.sendMessage.mock.calls.at(-1)?.[0] as {
+      blocks: Array<{ text: string }>;
+    };
+    expect(sent.blocks[0]?.text).toBe('Hello world');
+  });
+
+  it('sends only text added after the cached run', async () => {
+    const chrome = installChromeMock();
+    const container = setupPage('<p>Hello world</p>');
+    const translator = makeTranslator();
+    await translateOnce(translator, chrome, 'req-1', '안녕하세요 세계');
+
+    container.insertAdjacentHTML('beforeend', '<p>Second paragraph</p>');
+    const result = await translator.start('req-2', selectors, 'ko', 'en', { maxChars: 1200 });
+    expect(result).toEqual({ total: 1, fromCache: 1 });
+    const sent = chrome.sendMessage.mock.calls.at(-1)?.[0] as {
+      blocks: Array<{ text: string }>;
+    };
+    expect(sent.blocks.length).toBe(1);
+    expect(sent.blocks[0]?.text).toBe('Second paragraph');
+  });
+
+  it('leaves the page untouched when toggling with no cache', () => {
+    installChromeMock();
+    setupPage('<p>Hello world</p>');
+    const translator = makeTranslator();
+
+    expect(translator.hasCache).toBe(false);
+    expect(translator.toggleView()).toBe('translated');
+    expect(document.querySelector('p')?.textContent).toBe('Hello world');
+  });
+
+  it('drops the cache on restore so the next run re-translates', async () => {
+    const chrome = installChromeMock();
+    setupPage('<p>Hello world</p>');
+    const translator = makeTranslator();
+    await translateOnce(translator, chrome, 'req-1', '안녕하세요 세계');
+
+    expect(translator.restore()).toBe(1);
+    expect(translator.hasCache).toBe(false);
+
+    const result = await translator.start('req-2', selectors, 'ko', 'en', { maxChars: 1200 });
+    expect(result).toEqual({ total: 1, fromCache: 0 });
   });
 });
